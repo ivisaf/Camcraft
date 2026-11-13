@@ -24,12 +24,15 @@ pub enum CycleKind {
     Deep,
     /// Rigid tapping: feed down and back at pitch·rpm (G84).
     Tap,
+
     /// Boring: feed in, rapid out (G86's mill-side shape; spindle
     /// orientation is the machine's, M1.7's post word).
     Bore,
     /// Back-boring: feed in AND feed out — the retract must not drag
     /// the already-cut back surface, so no rapid on the way home.
     BackBore,
+    /// Tapping with an explicitly selected floating tap holder.
+    FloatingTap,
 }
 
 /// One hole's machining intent, standing beside the expanded chain:

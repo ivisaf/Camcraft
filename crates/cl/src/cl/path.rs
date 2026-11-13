@@ -8,10 +8,14 @@ use crate::geometry::units::Unit;
 use super::comp::CompSpan;
 use super::edge_break::EdgeBreak;
 use super::thread::ThreadCycle;
+use super::torch::PlasmaCut;
 use super::touch::ProbeTouch;
 use super::moves::{lattice, Move, MoveKind};
 use super::plane::{z_extrema, ArcPlane};
 use super::cycle::Cycle;
+
+#[path = "path_approach.rs"]
+mod approach;
 use super::pose::{is_vertical, normalize_axis};
 
 /// A generated path: linked moves, plus — for drilling paths only — the
@@ -47,6 +51,10 @@ pub struct Toolpath {
     /// judges the moves against the part WITH these bevels, so the
     /// break the op exists to cut is not a gouge and nothing past it is.
     pub breaks: Vec<EdgeBreak>,
+    /// The plasma statement (#670, [`PlasmaCut`]): `None` for every
+    /// path but a plasma profile's - the kerf, the torch on / off per
+    /// contour and the contours' nesting, in cut order.
+    pub plasma: Option<PlasmaCut>,
 }
 
 impl Toolpath {
@@ -59,6 +67,7 @@ impl Toolpath {
             threads: Vec::new(),
             probes: Vec::new(),
             breaks: Vec::new(),
+            plasma: None,
         }
     }
 
@@ -201,28 +210,6 @@ impl PathBuilder {
             notes: Vec::new(),
             comps: Vec::new(),
             approach: false,
-        }
-    }
-
-    /// A builder seeded at `at` on the clearance plane whose path always
-    /// opens with a rapid (#690, #697). Posts write only a move's end, so
-    /// the opening rapid is the program's approach - the G00 after the
-    /// tool call. A generator's own rapid to its start is dropped when the
-    /// start IS the seed (a zero-length move), and the first motion would
-    /// then be a feed out of the tool-change position; so if the first
-    /// move is not a rapid, a zero-length rapid at the seed is stated
-    /// ahead of it. It lands before any move is recorded, so no cycle,
-    /// comp span or note index ever shifts.
-    pub fn approached(at: Point3) -> Self {
-        PathBuilder { approach: true, ..Self::new(at) }
-    }
-
-    /// The approach law of [`approached`](Self::approached), run before
-    /// the first appended move of `kind`.
-    fn open(&mut self, kind: MoveKind) {
-        if std::mem::take(&mut self.approach) && self.moves.is_empty() && kind != MoveKind::Rapid {
-            self.moves.push(Move::new(MoveKind::Rapid, self.at, self.at, None).attach_axis(self.axis));
-            self.at_pose = self.axis;
         }
     }
 
@@ -420,6 +407,7 @@ impl PathBuilder {
             threads: Vec::new(),
             probes: Vec::new(),
             breaks: Vec::new(),
+            plasma: None,
         }
     }
 }

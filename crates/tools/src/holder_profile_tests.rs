@@ -145,3 +145,65 @@ fn the_stack_fills_the_gap_to_a_raised_body_and_the_cylinder_keeps_its_sums() {
     assert_eq!(c.bands, vec![HolderBand { above: g.flute_len + g.shank_len, len: g.holder_len, r: g.holder_radius }]);
     assert_eq!(c.top.to_bits(), (g.flute_len + g.shank_len + g.holder_len).to_bits());
 }
+
+// ---- #828: an assumed (machine-default) holder is floored ------------
+
+/// The library holder `entry` drawn for `t` at its default gauge, as the
+/// machine-default door and the explicit pick both land it.
+fn library_profile(entry: &str, t: &crate::tools::Tool) -> HolderProfile {
+    let e = crate::holder_library::find(entry).expect("a library holder");
+    let pts = e.points(t.flute_len + t.shank_len, e.gauge_len).expect("drawn");
+    crate::spun::SpunProfile::new(pts).expect("a sane outline").holder_profile()
+}
+
+fn em4() -> crate::tools::Tool {
+    catalog().into_iter().find(|(n, _)| *n == "EM-0400-2FL").map(|(_, t)| t).expect("catalog entry")
+}
+
+/// Farthest the stack the fixture laws sweep reaches over `[lo, hi]`.
+fn stack_reach(s: &HolderStack, lo: f64, hi: f64) -> f64 {
+    s.bands.iter().filter(|b| b.above < hi && b.above + b.len > lo).fold(0.0, |a, b| a.max(b.r))
+}
+
+/// The review's band: a wall 20 mm off the tool axis, 55-65 mm above
+/// the tip - inside the bare tool's 44 mm stand-in cylinder, outside the
+/// ER20 nut (35 mm) and the TTS collar (38.1 mm). On a BT30 and a TTS
+/// machine the assumed default convicts at least where the bare tool
+/// does; the same holder picked explicitly is judged by its real shape.
+#[test]
+fn an_assumed_holder_convicts_the_band_above_the_shank_where_the_bare_tool_does() {
+    let t = em4();
+    let g = t.geom();
+    let (lo, hi, wall) = (55.0, 65.0, 20.0);
+    let bare = HolderStack::cylinder(&g);
+    assert!(stack_reach(&bare, lo, hi) > wall, "the bare tool's stand-in cylinder reaches the wall");
+    for entry in ["BT30 ER20", "TTS ER20"] {
+        let real = library_profile(entry, &t);
+        assert!(stack_reach(&real.stack(&g), lo, hi) < wall, "{entry}: the explicit pick is its real, narrower nut");
+        let assumed = real.floored(&g);
+        assert!(stack_reach(&assumed.stack(&g), lo, hi) >= stack_reach(&bare, lo, hi), "{entry}: the default convicts the band");
+        // Never smaller than either, anywhere: the union.
+        let top = real.top().max(bare.top);
+        for k in 0..=400 {
+            let z = g.flute_len + g.shank_len + (top - g.flute_len - g.shank_len) * f64::from(k) / 400.0;
+            let r = assumed.reach_over(z, z);
+            assert!(r >= real.reach_over(z, z) - 1e-9, "{entry} z {z}: {r} under the body");
+            if z <= bare.top {
+                assert!(r >= g.holder_radius - 1e-9, "{entry} z {z}: {r} under the stand-in cylinder");
+            }
+        }
+        // The single-cylinder laws read it no smaller than the bare tool.
+        let e = assumed.enclose(&t).expect("clears the flutes");
+        assert!(e.holder_d >= t.holder_d && e.holder_len >= t.holder_len, "{entry}: {} x {}", e.holder_d, e.holder_len);
+    }
+}
+
+#[test]
+fn a_floor_with_no_cylinder_leaves_the_body_as_drawn() {
+    let t = em4();
+    let real = library_profile("BT30 ER20", &t);
+    let g = crate::tools::Tool { holder_len: 0.0, ..t.clone() }.geom();
+    assert_eq!(real.floored(&g), real);
+    let g = ToolGeom { holder_radius: f64::NAN, ..t.geom() };
+    assert_eq!(real.floored(&g), real);
+}

@@ -119,6 +119,8 @@ pub fn run_numbered_with(
     // #174: the operations already refused for want of onProbeGuard -
     // one named refusal per operation, not one per positioning move.
     let mut unguarded: Vec<String> = Vec::new();
+    // #671: the plasma header in force and the lit contour.
+    let mut torch = super::cnc_torch::TorchLaw::default();
 
     for (i, r) in records.iter().enumerate() {
         let before = s.out_len()?;
@@ -205,8 +207,31 @@ pub fn run_numbered_with(
             }
             Record::Section { begin } => {
                 s.call(if *begin { "onSection" } else { "onSectionEnd" }, "")?;
+                if !*begin {
+                    torch.section_end(&mut base, &mut warnings);
+                }
+            }
+            Record::Plasma(p) => {
+                // The plasma header (#671): its properties hold for the
+                // section; `onPlasma` may read them at once.
+                torch.header(&s, &base, &mut warnings);
+                base.extend(p.props());
+                s.set_properties(&merged(&base, &BTreeMap::new(), pos))?;
+                s.call("onPlasma", "")?;
+            }
+            Record::Torch(t) => {
+                // A lifecycle record like COMP: `onCommand` never sees
+                // it, and the law refuses what the stream cannot mean.
+                if torch.torch(t, &base, &mut warnings) && s.hook_exists("onTorchOn") {
+                    s.set_properties(&merged(&base, &t.props(), pos))?;
+                    s.set_current(pos.0, pos.1, pos.2)?;
+                    super::cnc_torch::fire(&mut s, t)?;
+                }
             }
             Record::Move(m) => {
+                if m.kind == MoveKind::Rapid {
+                    torch.rapid(&base, &mut warnings);
+                }
                 let p = m.props();
                 s.set_properties(&merged(&base, &p, pos))?;
                 s.set_current(pos.0, pos.1, pos.2)?;
@@ -229,7 +254,20 @@ pub fn run_numbered_with(
                 pos = (m.x, m.y, m.z);
             }
             Record::Cycle(c) => {
-                s.set_properties(&merged(&base, &c.props(), pos))?;
+                if c.kind == crate::cl::CycleKind::FloatingTap && !s.voices_floating_tapping() {
+                    let op = base.get("OperationName").and_then(Value::as_str).unwrap_or("");
+                    warnings.push(format!("operation {op}: floating-holder tapping is not supported by this post (floatingTapping is not declared)"));
+                }
+                let chain: Vec<_> = records[i + 1..].iter()
+                    .take_while(|r| !matches!(r, Record::Cycle(_) | Record::Section { begin: false }))
+                    .filter_map(|r| match r {
+                        Record::Move(m) if m.kind != MoveKind::Rapid => Some(m),
+                        _ => None,
+                    }).collect();
+                let mut props = c.props();
+                props.insert("ChainFeedRate".into(), json!(chain.first().and_then(|m| m.feed)));
+                props.insert("ChainBottomZ".into(), json!(chain.iter().map(|m| m.z).reduce(f64::min)));
+                s.set_properties(&merged(&base, &props, pos))?;
                 s.set_current(pos.0, pos.1, pos.2)?;
                 if is_false(&s.call("onCommand", &json!("Drilling").to_string())?) {
                     swallowed += 1;
@@ -420,6 +458,7 @@ pub fn run_numbered_with(
         }
     }
 
+    torch.close(&mut base, &mut warnings);
     let before = s.out_len()?;
     s.call("onClose", "")?;
     let after = s.out_len()?;

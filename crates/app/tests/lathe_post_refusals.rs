@@ -6,6 +6,8 @@
 //! back-bore, an XY arc that is no thread half-turn, a feed with no
 //! spindle to pace G99 against. The one XY shape it DOES speak - the
 //! threading kernel's half-turn helix - posts as G32 with F = lead.
+//! A section stating no surface speed after one that did posts its
+//! own G97, never the stale G96 (#772).
 //! The turning documents' goldens live in `lathe_post.rs`.
 //!
 //! Gate map (M4.4): covers app::post (engine, cnc on the lathe
@@ -162,4 +164,32 @@ fn a_feed_without_a_spindle_speed_is_refused_by_name() {
     ];
     let out = run(r);
     assert!(out.warnings.iter().any(|w| w.contains("needs a spindle speed")), "{:?}", out.warnings);
+}
+
+#[test]
+fn a_section_without_surface_speed_posts_g97_after_one_with_it() {
+    // #772: a CSS turning section, then an axial drill that states no
+    // SurfaceSpeed. The drill must run at its own rpm (G97), never at
+    // the stale G96 - on centre that is the G50 clamp, the machine max.
+    let mut r = vec![cnc::Record::Param { name: "SurfaceSpeed".into(), value: json!(200.0) }];
+    r.extend(preface());
+    r.push(mv(MoveKind::Rapid, 0.0, 6.0, 10.0, None));
+    r.push(mv(MoveKind::Feed, 0.0, 6.0, 0.0, Some(100.0)));
+    r.push(cnc::Record::Section { begin: false });
+    r.push(cnc::Record::Param { name: "SpindleSpeed".into(), value: json!(500.0) });
+    r.push(cnc::Record::Tool { number: 2, name: "DRILL-6".into() });
+    r.push(cnc::Record::Section { begin: true });
+    r.push(cnc::Record::Cycle(cnc::CycleRec {
+        kind: CycleKind::Drill, x: 0.0, y: 0.0, r_z: 22.0, bottom_z: 10.0, entry_z: 20.0, peck: 0.0,
+        dwell: 0.0, first_move: 0, feed: Some(100.0),
+    }));
+    r.push(mv(MoveKind::Rapid, 0.0, 0.0, 22.0, None));
+    r.push(cnc::Record::Section { begin: false });
+    let out = run(r);
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    let p = &out.program;
+    assert_eq!(p.matches("G96").count(), 1, "only the turning section is CSS: {p}");
+    assert!(p.contains("G96 S200 M03\n"), "{p}");
+    let drill = &p[p.find("T0202").expect("the drill's tool change")..];
+    assert!(drill.contains("G97 S500 M03\n"), "the drill states its own rpm: {drill}");
 }

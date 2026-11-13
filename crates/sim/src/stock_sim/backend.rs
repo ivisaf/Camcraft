@@ -149,26 +149,7 @@ impl Stock {
     pub fn simulate(&mut self, ops: &[SimOp]) -> Result<(), StockError> {
         match self {
             Stock::Column(d) => super::cut::simulate(d, ops),
-            Stock::Field(f) => {
-                check_ops(ops)?;
-                let chord_tol = (f.cell() * 0.25).max(1e-9);
-                let flank = spanning_flank(f);
-                for (i, op) in ops.iter().enumerate() {
-                    let tool = if op.ball {
-                        SdfTool::Shanked { r: op.radius, shank: flank }
-                    } else if let Some(cot) = op.cone {
-                        SdfTool::Taper { r: op.radius, cot }
-                    } else if let Some(corner) = op.corner {
-                        SdfTool::BullNose { r: op.radius, corner, flank }
-                    } else {
-                        SdfTool::Flat { r: op.radius, flank }
-                    };
-                    for chunk in op.moves.chunks(super::field_batch::BATCH_MOVES) {
-                        f.subtract_batch(chunk, &tool, chord_tol).map_err(|e| named_op(i, e))?;
-                    }
-                }
-                Ok(())
-            }
+            Stock::Field(f) => simulate_field(f, ops),
         }
     }
 
@@ -252,6 +233,31 @@ pub(crate) fn spanning_flank(f: &SdfField) -> f64 {
     let b = f.bounds();
     let (dx, dy, dz) = (b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z);
     (dx * dx + dy * dy + dz * dz).sqrt() + 2.0 * f.cap() + 4.0 * f.cell()
+}
+
+/// The field arm of [`Stock::simulate`], stated once so a carried field
+/// (`CarriedField::simulate`, #637 E2c) cuts through the very same tool
+/// construction: `check_ops` first, then each op's moves batched per brick
+/// against the solid `spanning_flank` gives the column's reach.
+pub(crate) fn simulate_field(f: &mut SdfField, ops: &[SimOp]) -> Result<(), StockError> {
+    check_ops(ops)?;
+    let chord_tol = (f.cell() * 0.25).max(1e-9);
+    let flank = spanning_flank(f);
+    for (i, op) in ops.iter().enumerate() {
+        let tool = if op.ball {
+            SdfTool::Shanked { r: op.radius, shank: flank }
+        } else if let Some(cot) = op.cone {
+            SdfTool::Taper { r: op.radius, cot }
+        } else if let Some(corner) = op.corner {
+            SdfTool::BullNose { r: op.radius, corner, flank }
+        } else {
+            SdfTool::Flat { r: op.radius, flank }
+        };
+        for chunk in op.moves.chunks(super::field_batch::BATCH_MOVES) {
+            f.subtract_batch(chunk, &tool, chord_tol).map_err(|e| named_op(i, e))?;
+        }
+    }
+    Ok(())
 }
 
 /// A field refusal, said with the op that caused it: the column

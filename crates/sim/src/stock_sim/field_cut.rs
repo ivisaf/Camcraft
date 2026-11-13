@@ -145,6 +145,10 @@ impl SdfField {
             )));
         }
         let mut sweeps: Vec<([f64; 3], Sweep)> = Vec::new();
+        // #637 E1: a solid that can matter and does not span the world
+        // above its tip suspends the floor read's monotone law.
+        let z_hi = super::march::world(self).0;
+        let mut bounded = false;
         for m in moves {
             if !m.is_finite() {
                 return Err(StockError::Invalid(
@@ -183,16 +187,22 @@ impl SdfField {
             for sw in built {
                 // The ceiling bounds the WORK: the window as clipped
                 // to the cut region, the only cells the walk can visit.
-                let work = self.clipped(sw.window(self.cell, self.cap, ax)).map_or(0, window_cells);
+                let window = self.clipped(sw.window(self.cell, self.cap, ax));
+                let work = window.map_or(0, window_cells);
                 if work > MAX_CELLS_PER_MOVE {
                     return Err(StockError::Invalid(format!(
                         "field subtract: a chord's swept window spans more than {MAX_CELLS_PER_MOVE} cells at cell size {} - the move is too long for one field update; segment it",
                         self.cell
                     )));
                 }
+                if window.is_some() && !sw.spans_above(ax, z_hi) {
+                    bounded = true;
+                }
                 sweeps.push((ax, sw));
             }
         }
+        // Set only past every gate: a refusal leaves the field as it stood.
+        self.bounded_cuts |= bounded;
         self.cut_batch(&sweeps);
         Ok(())
     }

@@ -104,11 +104,17 @@ fn containment_outside_clears_past_the_edge_never_the_recess() {
     assert!((lo + 5.0).abs() < 1e-6, "the last level sits on the picked face, got {lo}");
     let mut worst = f64::INFINITY;
     for m in &f {
-        for i in 0..=8 {
-            let s = f64::from(i) / 8.0;
-            let x = m.from.x + (m.to.x - m.from.x) * s;
-            let y = m.from.y + (m.to.y - m.from.y) * s;
-            worst = worst.min((x - c.0).hypot(y - c.1));
+        // An arc move is read along its arc (its chords at 0.01 mm, well
+        // inside the 0.05 this asserts to), never as the straight from
+        // `from` to `to`: since #689 a closed ring fits as whole arcs,
+        // whose end-to-end straight crosses the recess the arc rounds.
+        for (a, b) in m.chords(0.01) {
+            for i in 0..=8 {
+                let s = f64::from(i) / 8.0;
+                let x = a.x + (b.x - a.x) * s;
+                let y = a.y + (b.y - a.y) * s;
+                worst = worst.min((x - c.0).hypot(y - c.1));
+            }
         }
     }
     assert!(

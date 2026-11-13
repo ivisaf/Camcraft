@@ -170,7 +170,7 @@ pub fn area_unsupported(kind: OpType) -> Option<String> {
         | OpType::Trace
         | OpType::Engrave => return None,
         // Authored geometry: the numbers ARE the area.
-        OpType::Slot => format!("a {kind} is authored by its two endpoints and width - move those instead of a boundary"),
+        OpType::Slot | OpType::TrochoidalSlot => format!("a {kind} is authored by its two endpoints and width - move those instead of a boundary"),
         OpType::Circular => format!("a {kind} is authored by its centre and radius, typed or fitted to a picked round rim or face - set those instead of a boundary"),
         // The cone's ride is the wall itself: an offset or clipped
         // outline would be ridden where nothing was picked.
@@ -182,6 +182,9 @@ pub fn area_unsupported(kind: OpType) -> Option<String> {
             format!("{kind} rides its hole list - edit the holes instead of a boundary")
         }
         OpType::Probe => format!("a {kind} touches its picked feature - there is no area to bound"),
+        OpType::PlasmaProfile => {
+            format!("a {kind} cuts its picked contours through the plate - pick the contours instead of a boundary")
+        }
         OpType::Deburr => format!("{kind} breaks the model's own exposed edges - there is no area to bound"),
         // Mesh-driven with a moving tool axis: the model's own shadow.
         OpType::Contour5D

@@ -42,6 +42,10 @@ struct Staged {
 /// carried it to world) keeps it, so the UI can show where.
 fn machining(name: &str, e: &crate::machining2d::GenError) -> CommandError {
     let msg = format!("{name}: {e}");
+    // #261 part 3: the moves built before the refusal ride it, display-only.
+    if let Some(ghost) = e.ghost() {
+        return CommandError::MachiningGhost { msg, at: e.location(), ghost: ghost.clone() };
+    }
     match e.location() {
         Some(at) => CommandError::MachiningAt { msg, at },
         None => CommandError::Machining(msg),

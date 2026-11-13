@@ -79,7 +79,7 @@ pub(super) fn mid_turn_sweeps(
     in_stock: &dyn Fn(Point2) -> bool,
     surface: &dyn Fn(Point2) -> Steps,
     part_at: &dyn Fn(Point2) -> bool,
-    hidden: &dyn Fn(Point2, f64, f64, f64, usize) -> bool,
+    hidden: &dyn Fn(Point2, Point2, f64, f64, f64, usize) -> bool,
 ) -> Vec<Warning> {
     let mut warns = Vec::new();
     // The column memo, one per path (see the module law above): a
@@ -146,12 +146,14 @@ fn swing_hit(
     in_stock: &dyn Fn(Point2) -> bool,
     surface: &dyn Fn(Point2) -> Steps,
     part_at: &dyn Fn(Point2) -> bool,
-    hidden: &dyn Fn(Point2, f64, f64, f64, usize) -> bool,
+    hidden: &dyn Fn(Point2, Point2, f64, f64, f64, usize) -> bool,
 ) -> Option<bool> {
-    // (pc, r2, h0): the band's column, its outer reach squared, its
+    // (pc, tip, r2, h0): the band's column, the tip whose kerf the
+    // flutes cleared (law (c)'s inner edge - it stays at the tip when
+    // the band leans off it, #903), its outer reach squared, its
     // bottom. Plus the union box of every disc, for the filter.
-    let mut states: Vec<(Point2, f64, f64)> = Vec::new();
-    let mut bands_at: Vec<(Point2, f64, f64)> = Vec::new();
+    let mut states: Vec<(Point2, Point2, f64, f64)> = Vec::new();
+    let mut bands_at: Vec<(Point2, Point2, f64, f64)> = Vec::new();
     let (mut x0, mut y0) = (f64::INFINITY, f64::INFINITY);
     let (mut x1, mut y1) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
     for &t in &PATH_FRACS {
@@ -165,24 +167,27 @@ fn swing_hit(
                 from_abc[1] + (to_abc[1] - from_abc[1]) * g,
                 from_abc[2] + (to_abc[2] - from_abc[2]) * g,
             ];
-            let a = angles_to_axis(abc);
+            let lean = angles_to_axis(abc).filter(|a| !is_vertical(a));
             for &(above, band_r, band_len) in bands {
-                if band_r <= r || band_len <= 0.0 {
+                // Law (c)'s skip, read the same way: a band within the
+                // cutter's radius is the flutes' kerf only upright (#903).
+                if band_len <= 0.0 || band_r <= 0.0 || (lean.is_none() && band_r <= r) {
                     continue;
                 }
-                let (offx, offy, r_band, h0) = match a {
-                    Some(a) if !is_vertical(&a) => {
+                let (offx, offy, r_band, h0) = match lean {
+                    Some(a) => {
                         let mid = above + band_len * 0.5;
                         let spread = (band_len * 0.5) * (a[0] * a[0] + a[1] * a[1]).sqrt();
                         let za = p.z + above * a[2];
                         let zb = p.z + (above + band_len) * a[2];
                         (mid * a[0], mid * a[1], band_r + spread, za.min(zb) - band_r)
                     }
-                    _ => (0.0, 0.0, band_r, p.z + above),
+                    None => (0.0, 0.0, band_r, p.z + above),
                 };
                 let pc = Point2::new(p.x + offx, p.y + offy);
-                states.push((pc, (r_band + 1e-9) * (r_band + 1e-9), h0));
-                bands_at.push((pc, r_band, h0));
+                let tip = Point2::new(p.x, p.y);
+                states.push((pc, tip, (r_band + 1e-9) * (r_band + 1e-9), h0));
+                bands_at.push((pc, tip, r_band, h0));
                 x0 = x0.min(pc.x - r_band);
                 x1 = x1.max(pc.x + r_band);
                 y0 = y0.min(pc.y - r_band);
@@ -191,7 +196,7 @@ fn swing_hit(
         }
     }
     if states.is_empty() {
-        return None; // every band is the tool's own radius: nothing to sweep
+        return None; // every band upright within the tool's radius: nothing to sweep
     }
     let near: Vec<Point2> = samples
         .iter()
@@ -216,13 +221,12 @@ fn swing_hit(
     }
     let inner2 = (r + gouge_tol) * (r + gouge_tol);
     let mut worst = None;
-    for &(pc, r2, h0) in &states {
+    for &(pc, tip, r2, h0) in &states {
         for &(q, instk, zq, part) in &vals {
             if !instk {
                 continue; // outside the stock for every state's annulus
             }
-            let dd = dist2_seg(q, pc, pc);
-            if dd > r2 || dd <= inner2 {
+            if dist2_seg(q, pc, pc) > r2 || dist2_seg(q, tip, tip) <= inner2 {
                 continue; // outside this band's annulus
             }
             if h0 < zq {
@@ -236,7 +240,7 @@ fn swing_hit(
     // The overhang backstop (M13.7 B, [`super::hidden`]): stock hidden
     // under a ledge is in no column sample; asked only when the column
     // law found nothing, so it adds convictions, never removes one.
-    if worst.is_none() && bands_at.iter().any(|&(pc, rb, h0)| hidden(pc, r + gouge_tol, rb, h0, upto)) {
+    if worst.is_none() && bands_at.iter().any(|&(pc, tip, rb, h0)| hidden(pc, tip, r + gouge_tol, rb, h0, upto)) {
         worst = Some(false);
     }
     worst

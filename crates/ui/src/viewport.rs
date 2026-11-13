@@ -44,15 +44,17 @@ const VERTEX_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayou
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-/// `struct U`: mvp + eye + wire (80 bytes), then six palette vec4s.
-const UNIFORM_SIZE: u64 = 80 + 6 * 16;
+/// `struct U`: mvp + eye + wire (80 bytes), six palette vec4s, then the
+/// wireframe edge ink of the live ground (#698).
+const UNIFORM_SIZE: u64 = 80 + 7 * 16;
 
 const SHADER: &str = "
 // The verdict / selection palette rides the uniform (M13.4's
 // colour-vision remap; Off = the literals these fields replaced).
 struct U { mvp: mat4x4<f32>, eye: vec3<f32>, wire: f32,
            clean: vec4<f32>, rest: vec4<f32>, gouge: vec4<f32>,
-           unjudged: vec4<f32>, hot: vec4<f32>, warm: vec4<f32> };
+           unjudged: vec4<f32>, hot: vec4<f32>, warm: vec4<f32>,
+           wire_ink: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: U;
 
 struct VSOut {
@@ -100,13 +102,14 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 }
 
 // Facet edges: dark over the shaded pass, warm when the part is selected.
-// In wireframe mode the same wire runs over the dark background instead of
-// over lit metal, so it brightens to a cool gray (and the selection warm
+// In wireframe mode the same wire runs over the ground instead of over
+// lit metal, so it brightens to a cool gray on the dark ground and darkens
+// to a slate on the light one (#698, `u.wire_ink`; the selection warm
 // lifts to the same hot amber the fills use) - `u.wire` is the mode flag.
 @fragment
 fn fs_edge(in: VSOut) -> @location(0) vec4<f32> {
     let dark = vec3<f32>(0.06, 0.07, 0.09);
-    let gray = vec3<f32>(0.62, 0.66, 0.72);
+    let gray = u.wire_ink.xyz;
     let unlit = mix(dark, gray, u.wire);
     let sel = mix(u.warm.xyz, u.hot.xyz, u.wire);
     return vec4<f32>(mix(unlit, sel, in.sel), 1.0);
@@ -122,6 +125,9 @@ fn fs_edge(in: VSOut) -> @location(0) vec4<f32> {
 // stock parts upload cls = 0 everywhere and look exactly as before.
 // Verdict columns keep their color even when selected (the amber lift is
 // only for steel), and judged columns sit denser so the color reads.
+// Class 4 is no verdict but the incoming stock a carried setup starts
+// from (#406): a fixed teal, denser than steel, readable on the light and
+// the dark viewport alike (our own display choice).
 @fragment
 fn fs_stock(in: VSOut) -> @location(0) vec4<f32> {
     let cr = cross(dpdx(in.world), dpdy(in.world));
@@ -136,6 +142,7 @@ fn fs_stock(in: VSOut) -> @location(0) vec4<f32> {
         case 1: { tint = u.rest.xyz; alpha = 0.75; }  // rest
         case 2: { tint = u.gouge.xyz; alpha = 0.85; }  // gouge
         case 3: { tint = u.unjudged.xyz; alpha = 0.25; }  // no verdict
+        case 4: { tint = vec3<f32>(0.12, 0.66, 0.74); alpha = 0.45; }  // incoming stock (#406)
         default: {}
     }
     let judged = step(0.5, in.cls);
@@ -192,7 +199,8 @@ pub struct GpuPart {
     pub stock: bool,
     pub fill: bool,
     /// Per-vertex deviation class (stock_sim's `color_classes` law: 0
-    /// clean, 1 rest, 2 gouge, 3 unjudged), read only by `fs_stock`.
+    /// clean, 1 rest, 2 gouge, 3 unjudged; 4 the incoming-stock preview,
+    /// #406), read only by `fs_stock`.
     /// Empty means "no verdict rendered" - the part uploads class 0
     /// everywhere and paints exactly as an ordinary stock part.
     pub classes: Vec<f32>,
@@ -220,6 +228,12 @@ pub struct View3D {
     index_count: u32,
     model_index_count: u32,
     stock_index_end: u32,
+    /// Where the overlay stock parts (the incoming stock, #406) start
+    /// inside the stock range: `[overlay_index_start, stock_index_end)`
+    /// is drawn even when the traced stock replaces the rest of the
+    /// stock range - otherwise the preview vanished whenever toolpaths
+    /// existed (hand check of #519 on a real GPU).
+    overlay_index_start: u32,
     edge_buf: wgpu::Buffer,
     /// Pairs of u32 line indices; `[0, model_edge_count)` are model edges,
     /// the rest stock edges. Edges are per-part, so a stock face coplanar
@@ -588,6 +602,7 @@ impl View3D {
             index_count: 0,
             model_index_count: 0,
             stock_index_end: 0,
+            overlay_index_start: 0,
             edge_buf,
             edge_count: 0,
             model_edge_count: 0,
@@ -632,9 +647,7 @@ impl View3D {
     /// kind; partitioning for the draw order happens here, not in the
     /// caller, so a sloppy caller still gets models-first, stock-last.
     pub fn set_document(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, parts: &[GpuPart]) {
-        let mut order: Vec<&GpuPart> = parts.iter().filter(|p| !p.stock && !p.fill).collect();
-        order.extend(parts.iter().filter(|p| p.stock && !p.fill));
-        order.extend(parts.iter().filter(|p| p.fill));
+        let (order, overlay_from) = draw_order(parts);
 
         let mut verts: Vec<u8> = Vec::new();
         let mut idx: Vec<u32> = Vec::new();
@@ -642,8 +655,12 @@ impl View3D {
         let mut vertex_count = 0u32;
         let mut model_indices = 0u32;
         let mut stock_end = 0u32;
+        let mut overlay_start = None::<u32>;
         let mut model_edges = 0u32;
-        for part in &order {
+        for (pi, part) in order.iter().enumerate() {
+            if pi == overlay_from {
+                overlay_start = Some(idx.len() as u32);
+            }
             let sel: f32 = if part.selected { 1.0 } else { 0.0 };
             for (vi, v) in part.verts.iter().enumerate() {
                 for c in v {
@@ -677,6 +694,7 @@ impl View3D {
             self.index_count = 0; // render() then draws nothing, just clears
             self.model_index_count = 0;
             self.stock_index_end = 0;
+            self.overlay_index_start = 0;
             self.edge_count = 0;
             self.model_edge_count = 0;
             return;
@@ -711,6 +729,7 @@ impl View3D {
         self.index_count = idx.len() as u32;
         self.model_index_count = model_indices;
         self.stock_index_end = stock_end;
+        self.overlay_index_start = overlay_start.unwrap_or(stock_end).min(stock_end);
         self.edge_buf = edge_buf;
         self.edge_count = edges.len() as u32;
         self.model_edge_count = model_edges;
@@ -776,6 +795,11 @@ impl View3D {
         stock: Option<&dyn Fn(&mut wgpu::RenderPass<'_>)>,
     ) {
         let wireframe = display == crate::state::DisplayMode::Wireframe;
+        // The live theme's viewport ground (#698): the clear colour and
+        // the wireframe ink follow it, so a light theme gets a light ground.
+        let ground = crate::egui_app::theme::current().viewport;
+        let light = crate::egui_app::ground_ink::light_ground(ground);
+        let wire = crate::egui_app::ground_ink::wire_ink(light);
         let mut data = [0u8; UNIFORM_SIZE as usize];
         let mut o = 0usize;
         for col in mvp {
@@ -797,6 +821,10 @@ impl View3D {
                 o += 4;
             }
         }
+        for v in [wire[0], wire[1], wire[2], 1.0] {
+            data[o..o + 4].copy_from_slice(&v.to_le_bytes());
+            o += 4;
+        }
         queue.write_buffer(&self.uniform, 0, &data);
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -806,9 +834,9 @@ impl View3D {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.09,
-                        g: 0.10,
-                        b: 0.12,
+                        r: f64::from(ground.r()) / 255.0,
+                        g: f64::from(ground.g()) / 255.0,
+                        b: f64::from(ground.b()) / 255.0,
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
@@ -859,6 +887,13 @@ impl View3D {
             if let Some(draw) = traced {
                 draw(&mut pass);
                 pass.set_bind_group(0, &self.bind_group, &[]);
+                // The overlay stock (the incoming stock, #406) is not the
+                // traced stock's to replace: it still draws.
+                if self.overlay_index_start < self.stock_index_end {
+                    pass.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_pipeline(&self.stock_pipeline);
+                    pass.draw_indexed(self.overlay_index_start..self.stock_index_end, 0, 0..1);
+                }
             } else if self.model_index_count < self.stock_index_end && !wireframe {
                 pass.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.set_pipeline(&self.stock_pipeline);
@@ -1430,3 +1465,20 @@ fn mat_mul(a: [[f64; 4]; 4], b: [[f64; 4]; 4]) -> [[f32; 4]; 4] {
     })
 }
 
+/// The upload order: models, then stock, then the overlay stock (which
+/// the traced stock never replaces), then region fills; and the index in
+/// that order where the overlay stock starts.
+pub(crate) fn draw_order(parts: &[GpuPart]) -> (Vec<&GpuPart>, usize) {
+    let mut order: Vec<&GpuPart> = parts.iter().filter(|p| !p.stock && !p.fill).collect();
+    order.extend(parts.iter().filter(|p| p.stock && !p.fill && !is_overlay(p)));
+    let overlay_from = order.len();
+    order.extend(parts.iter().filter(|p| p.stock && !p.fill && is_overlay(p)));
+    order.extend(parts.iter().filter(|p| p.fill));
+    (order, overlay_from)
+}
+
+/// An overlay stock part: drawn in the stock pass but never replaced by
+/// the traced stock (today only the incoming stock, #406).
+pub(crate) fn is_overlay(p: &GpuPart) -> bool {
+    p.classes.first().is_some_and(|c| (*c - crate::incoming_view::INCOMING_CLASS).abs() < 0.5)
+}

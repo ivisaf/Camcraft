@@ -187,3 +187,78 @@ fn unreadable_input_is_a_clean_error_never_a_panic() {
         r.refused
     );
 }
+
+#[test]
+fn iso_13399_tool_csys_aligns_automatically() {
+    let r = read("tool_csys_iso13399.step");
+    let (axis, offset) = r.align_tool_body().expect("aligns from CIP");
+    assert!(close(axis, [0.0, 0.0, 1.0]), "{axis:?}");
+    assert!((offset - 75.0).abs() < 1e-12, "{offset}");
+}
+
+#[test]
+fn a_file_without_tool_csys_falls_back_by_name() {
+    let r = read("tool_csys_none.step");
+    let err = r.align_tool_body().expect_err("no coordinate systems");
+    assert_eq!(err, "the file names no coordinate systems");
+}
+
+#[test]
+fn degenerate_tool_csys_falls_back_by_name() {
+    let r = read("tool_csys_degenerate.step");
+    let err = r.align_tool_body().expect_err("degenerate coordinate systems");
+    assert!(
+        err.starts_with("every ISO 13399 coordinate system was refused"),
+        "{err}"
+    );
+}
+
+#[test]
+fn cip_degenerate_with_csif_valid_must_refuse() {
+    // When CIP is degenerate but CSIF is valid, align_tool_body must refuse
+    // naming CIP rather than silently mis-placing using CSIF.
+    let text = std::fs::read_to_string(testdata("tool_csys_iso13399.step"))
+        .expect("fixture reads")
+        .replace("AXIS2_PLACEMENT_3D('MCS',", "AXIS2_PLACEMENT_3D('CSIF',")
+        .replace(
+            "#52 = DIRECTION('', (0.0, 0.0, 1.0));",
+            "#52 = DIRECTION('', (0.0, 0.0, 0.0));",
+        );
+    let r = read_tool_csys(text.as_bytes()).expect("parses");
+    assert!(r.find(CsysRole::Interface).is_ok(), "CSIF is valid");
+    let err = r
+        .align_tool_body()
+        .expect_err("must not fall back to CSIF when CIP is degenerate");
+    assert!(
+        err.contains("InProcess refused") || err.contains("CIP"),
+        "{err}"
+    );
+}
+
+#[test]
+fn origins_and_facets_in_non_mm_units() {
+    let text = std::fs::read_to_string(testdata("tool_csys_box_iso13399.step"))
+        .expect("fixture reads")
+        .replace(
+            "#12 = ( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) );",
+            "#12 = ( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.CENTI.,.METRE.) );",
+        );
+    let r = read_tool_csys(text.as_bytes()).expect("parses");
+    let cip = r.find(CsysRole::InProcess).expect("CIP");
+    assert!(close(cip.origin, [0.0, 0.0, -750.0]), "{:?}", cip.origin);
+    let (axis, offset) = r.align_tool_body().expect("aligns");
+    assert!(close(axis, [0.0, 0.0, 1.0]));
+    assert!((offset - 750.0).abs() < 1e-9, "{offset}");
+
+    let mesh = camcraft_app::geometry::import::parse_model(
+        text.as_bytes(),
+        camcraft_app::geometry::import::Format::Step,
+    )
+    .expect("loads");
+    let min_z = mesh
+        .facets
+        .iter()
+        .flat_map(|t| [t.a.z, t.b.z, t.c.z])
+        .fold(f64::INFINITY, f64::min);
+    assert!((min_z - -400.0).abs() < 1e-3, "min_z {min_z}");
+}

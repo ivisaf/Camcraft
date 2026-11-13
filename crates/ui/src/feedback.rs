@@ -88,6 +88,7 @@ impl State {
         }
         self.feedback_ctx = None;
         self.feedback_at = None;
+        self.feedback_ghost = None;
     }
 
     /// #261 part 2: the world spot the standing generate refusal names -
@@ -98,6 +99,18 @@ impl State {
     pub fn refusal_focus(&self) -> Option<[f64; 3]> {
         match &self.feedback {
             Some((ErrorScope::Operation, _)) if self.feedback_live() => self.feedback_at,
+            _ => None,
+        }
+    }
+
+    /// #261 part 3: the moves the standing generate refusal handed back,
+    /// for the viewport's diagnostic ghost. Same law as
+    /// [`State::refusal_focus`]: `None` once the refusal is gone or no
+    /// longer describes the page.
+    #[must_use]
+    pub fn refusal_ghost(&self) -> Option<&camcraft_app::machining2d::Ghost> {
+        match &self.feedback {
+            Some((ErrorScope::Operation, _)) if self.feedback_live() => self.feedback_ghost.as_ref(),
             _ => None,
         }
     }

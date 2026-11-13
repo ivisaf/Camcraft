@@ -9,7 +9,7 @@
 //! fmt + EnvFilter setup. Our own wiring, no vendor material.
 
 use std::path::Path;
-use std::time::Instant;
+use crate::clock::Instant;
 
 use tracing_subscriber::EnvFilter;
 

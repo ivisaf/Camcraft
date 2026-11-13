@@ -65,3 +65,32 @@ fn the_wcs_row_edits_the_active_setups_origin_undoably() {
     run(&mut state, CommandKind::Redo);
     assert_eq!(x(&state, "Setup2"), Some(7.0), "redo puts it back");
 }
+
+/// #876: the WCS page shows its work-offset dropdown (drawn under the page
+/// text, #343) and no label on that page points at "the Setups page" - the
+/// stale hint that sent the user looking for a control that was right there.
+#[test]
+fn the_wcs_page_shows_the_work_offset_dropdown_and_no_setups_page_pointer() {
+    let _g = snapshot_guard();
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1280.0, 720.0))
+        .build_ui_state(frame, ShellUi::blank());
+    {
+        let st = &mut h.state_mut().state;
+        st.pending.push_back(CommandKind::CreateSetup { name: None, datum_from: None });
+        st.drain_actions();
+        crate::actions::target(st, UiTarget::Wcs);
+    }
+    h.run_steps(3);
+    let texts = super::structural::painted(&h);
+    assert!(
+        texts.iter().any(|(t, _)| t == "Work offset: the G54-G59 slot this setup posts. It does not move the origin."),
+        "the WCS page names the work offset in plain words: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|(t, _)| t.contains("Setups page")),
+        "no WCS-page label points at the Setups page: {texts:?}"
+    );
+    // The dropdown itself: an unset setup reads G54 in the combo.
+    h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().as_deref() == Some("G54"));
+}

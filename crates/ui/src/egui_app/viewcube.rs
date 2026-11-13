@@ -305,7 +305,8 @@ pub(crate) fn draw(
         })
         .collect();
     order.sort_by(|a, b| b.1.total_cmp(&a.1));
-    let stroke = egui::Stroke::new(1.0, egui::Color32::from_white_alpha(170));
+    let ink = super::ground_ink::cube();
+    let stroke = egui::Stroke::new(1.0, ink.edge);
     for &(i, depth) in &order {
         if depth >= 0.0 {
             continue; // back face
@@ -315,13 +316,13 @@ pub(crate) fn draw(
         // readable grays, so the cube's faces stay identifiable by
         // tone alone once the camera tumbles.
         let t = 0.5 + 0.5 * (n[2] * 0.82 + n[0] * 0.33 - n[1] * 0.46);
-        let mut g = (46.0 + 46.0 * t.clamp(0.0, 1.0)) as u8;
+        let mut g = (ink.face_base + ink.face_span * t.clamp(0.0, 1.0) as f32) as u8;
         let lit = hover_dir.is_some_and(|d| {
             d[0] * n[0] + d[1] * n[1] + d[2] * n[2] > 0.999
                 && (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - 1.0).abs() < 0.01
         });
         if lit {
-            g = g.saturating_add(52);
+            g = g.saturating_add(ink.hover_lift);
         }
         let quad = FACE_QUADS[i];
         let pts: Vec<egui::Pos2> = quad.iter().map(|&k| point_screen(cam, h, CORNERS[k])).collect();
@@ -338,7 +339,7 @@ pub(crate) fn draw(
                 egui::Align2::CENTER_CENTER,
                 label,
                 font.clone(),
-                egui::Color32::from_white_alpha(230),
+                ink.label,
             );
         }
     }
@@ -359,14 +360,13 @@ pub(crate) fn draw(
             Nav::Axes => state.show_world_axes,
         };
         let hov = hover.is_some_and(|p| r.contains(p));
-        ui.painter()
-            .rect_filled(*r, 5.0, egui::Color32::from_gray(if hov { 74 } else { 46 }));
-        let ink = if active {
-            egui::Color32::WHITE
-        } else {
-            egui::Color32::from_white_alpha(160)
-        };
-        let s = egui::Stroke::new(1.4, ink);
+        let fill = if hov { ink.button.saturating_add(28) } else { ink.button };
+        ui.painter().rect_filled(*r, 5.0, egui::Color32::from_gray(fill));
+        if ink.outline_buttons {
+            // The light ground outlines the button like a cube face.
+            ui.painter().rect_stroke(*r, 5.0, stroke, egui::StrokeKind::Inside);
+        }
+        let s = egui::Stroke::new(1.4, if active { ink.glyph_on } else { ink.glyph_off });
         let (a, b) = (r.min, r.max);
         let m = NAV_PX * 0.22;
         match kind {
@@ -437,14 +437,18 @@ pub(crate) fn draw(
                 ui.painter().add(egui::Shape::line(pts, s));
             }
             Nav::Axes => {
-                // The origin triad: X down-right, Y left, Z up - the
-                // palette the world axes themselves use.
-                let o = r.center() + egui::vec2(-1.0, 4.0);
-                let l = NAV_PX * 0.30;
+                // The origin triad: X down-right, Y down-left, Z up.
+                // An isometric triad: equal arms 120 deg apart, Z up, X and Y
+                // 30 deg below the horizontal; the box spans y -l..l/2, so the
+                // origin sits l/4 below the centre to centre it.
+                let l = NAV_PX * 0.32;
+                let (c30, s30) = (l * 0.866, l * 0.5);
+                let o = r.center() + egui::vec2(0.0, l * 0.25);
+                let [x, y, z] = ink.triad;
                 for (dir, col) in [
-                    (egui::vec2(l, l * 0.30), egui::Color32::from_rgb(230, 100, 100)),
-                    (egui::vec2(-l * 0.45, l * 0.50), egui::Color32::from_rgb(120, 210, 120)),
-                    (egui::vec2(0.0, -l * 1.05), egui::Color32::from_rgb(130, 160, 255)),
+                    (egui::vec2(c30, s30), x),
+                    (egui::vec2(-c30, s30), y),
+                    (egui::vec2(0.0, -l), z),
                 ] {
                     ui.painter()
                         .line_segment([o, o + dir], egui::Stroke::new(1.4, col));

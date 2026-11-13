@@ -220,6 +220,38 @@ impl HolderProfile {
         HolderStack { bands, top: self.top().max(shank_top) }
     }
 
+    /// #828: this body judged no smaller than the stand-in holder
+    /// cylinder of `g` (its `holder_radius` x `holder_len` on the
+    /// shank's top) - the union of the two, band by band. An ASSUMED
+    /// holder (a machine's default, not one the user picked) is judged
+    /// so: assuming a holder must never pass a wall the stand-in cylinder
+    /// convicts. A gap between the two is the shank running into the
+    /// holder, judged at the shank's radius as [`Self::stack`] does.
+    /// Non-finite or empty numbers leave the body as it is (the tool
+    /// record's own law refuses them first).
+    #[must_use]
+    pub fn floored(&self, g: &ToolGeom) -> Self {
+        let cyl = HolderBand { above: g.flute_len + g.shank_len, len: g.holder_len, r: g.holder_radius };
+        let sane = [cyl.above, cyl.len, cyl.r, g.shank_radius].iter().all(|v| v.is_finite());
+        if !sane || cyl.len <= 0.0 || cyl.r <= 0.0 || self.bands.is_empty() {
+            return self.clone();
+        }
+        let all: Vec<HolderBand> = self.bands.iter().copied().chain(std::iter::once(cyl)).collect();
+        let mut edges: Vec<f64> = all.iter().flat_map(|b| [b.above, b.above + b.len]).collect();
+        edges.sort_by(f64::total_cmp);
+        edges.dedup_by(|b, a| (*b - *a).abs() <= 1e-12);
+        let bands = edges
+            .windows(2)
+            .filter_map(|w| {
+                let (lo, hi) = (w[0], w[1]);
+                let mid = 0.5 * (lo + hi);
+                let r = all.iter().filter(|b| b.above < mid && mid < b.above + b.len).map(|b| b.r).fold(None, |a: Option<f64>, r| Some(a.map_or(r, |a| a.max(r))));
+                (hi - lo > 1e-12).then(|| HolderBand { above: lo, len: hi - lo, r: r.unwrap_or(g.shank_radius) })
+            })
+            .collect();
+        Self::from_bands(bands)
+    }
+
     /// The same tool with its holder replaced by the single cylinder
     /// that encloses this body, for every law that reads one cylinder:
     /// the holder from the shank's top to the body's top at the body's

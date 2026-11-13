@@ -20,6 +20,7 @@ use camcraft_app::operation::{self, PickShape, area_applies};
 
 use crate::boundary_draft::{self, Role};
 use crate::egui_app::colorvision::palette_of;
+use crate::egui_app::ground_ink::{Overlay, overlay};
 use crate::interact::{feature_segments, project_uv};
 use crate::state::State;
 
@@ -47,7 +48,7 @@ pub struct Mark {
 }
 
 /// The hover ink, the hover outline's own yellow.
-const HOVER_RGB: [f32; 3] = [1.0, 0.85, 0.40];
+pub(crate) const HOVER_RGB: [f32; 3] = [1.0, 0.85, 0.40];
 /// Arrows sampled along an open chain, at most.
 const MAX_ARROWS: usize = 12;
 
@@ -148,7 +149,7 @@ pub fn boundary_marks(state: &State, aspect: f64) -> Vec<Mark> {
     {
         let mut segs = Vec::new();
         feature_segments(state, &h.entity, f, aspect, &mut segs);
-        out.extend(segs.into_iter().map(|(a, b)| Mark { a, b, rgb: HOVER_RGB, width: 2.5, kind: MarkKind::Hover }));
+        out.extend(segs.into_iter().map(|(a, b)| Mark { a, b, rgb: overlay(Overlay::Hover), width: 2.5, kind: MarkKind::Hover }));
     }
     out
 }

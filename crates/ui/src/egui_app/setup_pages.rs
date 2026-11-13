@@ -48,7 +48,8 @@ pub(super) fn page(ui: &mut Ui, state: &mut State, name: &str, page: SetupPage) 
             if editable(ui, state, ctx) {
                 ownership(ui, state, ctx, Mount::Post);
                 pages::post_section(ui, state);
-                hint(ui, "The post options above apply to the whole document.");
+                ui.separator();
+                super::setup_post_page::options_ownership(ui, state, ctx);
             }
         }
         SetupPage::Fixtures => {
@@ -62,6 +63,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State, name: &str, page: SetupPage) 
             ui.heading(format!("Tool list - {title}"));
             ui.separator();
             tool_table(ui, state, ctx);
+            super::setup_post_page::tool_list_export(ui, state, ctx);
             ui.separator();
             pages::tool_list_section(ui, state, ctx);
             pages::sheet_footer(ui, state);
@@ -132,6 +134,10 @@ fn ownership(ui: &mut Ui, state: &mut State, ctx: Option<&str>, which: Mount) {
     ui.separator();
 }
 
+/// The active-setup radio's words (#866: "furniture" was our in-code
+/// word for a setup's stock, WCS and fixtures - never a user's).
+pub(crate) const ACTIVE_SETUP_LABEL: &str = "Active setup - new operations go into it, and the Stock and Work offset pages edit it";
+
 /// The setup's settings: which setup is active, where its stock comes
 /// from, how the part sits, and the word its WCS posts as.
 fn settings(ui: &mut Ui, state: &mut State, ctx: Option<&str>) {
@@ -143,7 +149,7 @@ fn settings(ui: &mut Ui, state: &mut State, ctx: Option<&str>) {
         return;
     };
     let is_active = setup::active(&state.world).as_deref() == Some(name);
-    if ui.radio(is_active, "Active setup - new operations and furniture join it").clicked() && !is_active {
+    if ui.radio(is_active, ACTIVE_SETUP_LABEL).clicked() && !is_active {
         state.pending.push_back(CommandKind::ActivateSetup(Some(name.to_owned())));
     }
     ui.separator();
@@ -159,6 +165,7 @@ fn settings(ui: &mut Ui, state: &mut State, ctx: Option<&str>) {
     super::setup_align_pick::picker(ui, state, name);
     super::setup_relative_pick::picker(ui, state, name);
     super::setup_plane_pick::row(ui, state, name);
+    super::setup_points_pick::row(ui, state, name);
     super::setup_axis_pick::rows(ui, state, name);
     super::setup_wcs_pick::picker(ui, state, name);
     ui.separator();

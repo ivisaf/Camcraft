@@ -64,7 +64,10 @@ fn the_fixtures_node_menu_offers_save_and_insert_from_library() {
     let state = State::new();
     let rows = menu_rows(&state, &TreeMenuTarget::Fixtures("Setup2".into()));
     let labels: Vec<&str> = rows.iter().map(|(l, _)| l.as_str()).collect();
-    assert_eq!(labels, ["Fixtures", "Import fixture…", "Save fixture to library…", "Insert from library…"]);
+    assert_eq!(
+        labels,
+        ["Fixtures", "Import fixture…", "Save fixture to library…", "Insert from library…", "Add built-in vise…", "Add accessory…", "Add fixture plate…"]
+    );
     assert!(matches!(&rows[2].1, Some(CommandKind::FixtureLibrarySaveDialog(s)) if s == "Setup2"));
     assert!(matches!(&rows[3].1, Some(CommandKind::FixtureLibraryInsertDialog(s)) if s == "Setup2"));
 }

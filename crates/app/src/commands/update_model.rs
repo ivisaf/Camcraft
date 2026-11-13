@@ -21,7 +21,7 @@ use flecs_ecs::prelude::{Entity, World};
 use crate::commands::{Command, CommandError};
 use crate::geometry::{Mesh, revision};
 use crate::model;
-use crate::schema::Facets;
+use crate::schema::{Facets, FixtureDef};
 use crate::stock::StockShape;
 
 /// Every stock entity that is a `FromModel` copy of `name` (M3.1 B's
@@ -54,6 +54,11 @@ pub struct UpdateModel {
     /// model at construction (`Some`) - the propagation law's side of the
     /// snapshot, so undo trades model and material back together.
     prev_stock: Option<std::sync::Arc<[crate::geometry::Triangle]>>,
+    /// #826: a fixture plate's marker, when the model is one. Its grid was
+    /// measured on the old mesh, so it goes with it and the riders leave
+    /// the plate (the safe reading: the user re-detects), in this same
+    /// undo step - the rule `ImportFixture` already kept for itself.
+    plate: Option<Box<(FixtureDef, crate::plate::mount::Unmounts)>>,
 }
 
 impl UpdateModel {
@@ -73,7 +78,7 @@ impl UpdateModel {
         };
         if !model::is_model(world, &entity) {
             return Err(CommandError::Invalid(format!(
-                "'{name}' is setup furniture, not a model"
+                "'{name}' is not a model - it is a setup's stock or work offset, a setup, a tool, an operation or other CAM data"
             )));
         }
         // Every copy of this model holds the same local facets, so one
@@ -86,7 +91,19 @@ impl UpdateModel {
             prev_facets: model::facets_of(world, &entity),
             prev_rev: model::rev_of(world, &entity),
             prev_stock,
+            plate: crate::fixture::def_of(world, &entity)
+                .filter(|d| d.plate.plate.is_some())
+                .map(|d| Box::new((d, crate::plate::mount::Unmounts::of(world, name)))),
         })
+    }
+
+    /// Drop the plate snapshot, so apply/invert leave the plate's grid and
+    /// its riders' mount markers alone. For `SetPlate`, which edits the
+    /// grid and re-seats the riders itself (#826 review).
+    #[must_use]
+    pub(crate) fn keeping_plate(mut self) -> Self {
+        self.plate = None;
+        self
     }
 
     /// What moved between the two revisions this command trades. Computed
@@ -121,6 +138,12 @@ impl Command for UpdateModel {
                 model::set_facets(world, &stock, self.mesh.facets.clone());
             }
         }
+        if let Some(p) = &self.plate {
+            let mut off = p.0.clone();
+            off.plate.plate = None;
+            entity.entity_view(world).set(off);
+            p.1.write(world, true);
+        }
     }
 
     fn invert(&self, world: &World) {
@@ -134,6 +157,10 @@ impl Command for UpdateModel {
                 }
             }
             model::set_rev(world, &entity, self.prev_rev);
+            if let Some(p) = &self.plate {
+                entity.entity_view(world).set(p.0.clone());
+                p.1.write(world, false);
+            }
         }
         if let Some(tris) = &self.prev_stock {
             for stock in stock_copies(world, &self.name) {

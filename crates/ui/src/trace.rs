@@ -25,12 +25,15 @@ pub mod composite;
 pub mod cpu_eye;
 pub mod eye;
 mod eye_geom;
+// The CPU-comparable readback waits on the device: native only (#31).
+#[cfg(not(target_arch = "wasm32"))]
+mod readback;
 
 use egui_wgpu::wgpu;
 use wgpu::util::DeviceExt;
 
 use camcraft_app::stock_sim::preview::{
-    gate_tol, step_eps, CutPatch, DistanceLattice, FieldLattice, LatticeMeta, Preview, PreviewCamera,
+    gate_tol, step_eps, CutPatch, DistanceLattice, FieldLattice, LatticeMeta, PreviewCamera,
 };
 
 const SHADER: &str = include_str!("trace.wgsl");
@@ -83,7 +86,14 @@ impl TracePass {
     /// Build the kernel. A device that refuses it (no compute, a
     /// validation failure) answers `Err` by name: the CPU march is the
     /// caller's next move, never a panic.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(device: &wgpu::Device) -> Result<Self, String> {
+        pollster::block_on(Self::new_async(device))
+    }
+
+    /// `new`, awaiting the device's verdict instead of blocking on it: a
+    /// browser answers the error scope from its event loop (#31).
+    pub async fn new_async(device: &wgpu::Device) -> Result<Self, String> {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("trace"),
@@ -128,7 +138,7 @@ impl TracePass {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        if let Some(err) = pollster::block_on(scope.pop()) {
+        if let Some(err) = scope.pop().await {
             return Err(format!("trace pass: the device refused the compute kernel ({err})"));
         }
         Ok(TracePass { pipeline, bgl, uniform, scene: None })
@@ -289,85 +299,6 @@ impl TracePass {
         drop(pass);
         Ok(out)
     }
-
-    /// March a frame and read it back as the sim's `Preview` - the
-    /// parity tests' entry and the CPU-comparable answer. NaN depth
-    /// and class 3 wherever the kernel reported no hit; `unresolved`
-    /// counts its budget bails, the CPU law exactly.
-    pub fn trace(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        cam: &PreviewCamera,
-        w: u32,
-        h: u32,
-        tol: f64,
-    ) -> Result<Preview, String> {
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("trace-enc"),
-        });
-        let out = self.encode(device, queue, &mut enc, cam, w, h, tol)?;
-        let read = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("trace-read"),
-            size: out.size(),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        enc.copy_buffer_to_buffer(&out, 0, &read, 0, out.size());
-        queue.submit([enc.finish()]);
-        if let Some(err) = pollster::block_on(scope.pop()) {
-            return Err(format!("trace pass: the frame failed validation ({err})"));
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        read.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        if device.poll(wgpu::PollType::wait_indefinitely()).is_err() {
-            return Err("trace pass: the device was lost while marching".into());
-        }
-        if !matches!(rx.recv(), Ok(Ok(()))) {
-            return Err("trace pass: the frame could not be read back".into());
-        }
-        let raw = read
-            .slice(..)
-            .get_mapped_range()
-            .map_err(|e| format!("trace pass: readback map failed ({e})"))?;
-        let frame = decode(&raw, w, h);
-        drop(raw);
-        read.unmap();
-        Ok(frame)
-    }
-}
-
-/// The kernel's per-pixel vec4s as the sim's frame type.
-fn decode(raw: &[u8], w: u32, h: u32) -> Preview {
-    let n = (w as usize) * (h as usize);
-    let mut pv = Preview {
-        w,
-        h,
-        depth: vec![f64::NAN; n],
-        class: vec![3.0; n],
-        shade: vec![0.0; n],
-        unresolved: 0,
-    };
-    let word = |o: usize| {
-        raw.get(o..o + 4)
-            .and_then(|b| b.try_into().ok())
-            .map_or(f32::NAN, f32::from_le_bytes)
-    };
-    for i in 0..n {
-        let o = i * OUT_STRIDE as usize;
-        let status = word(o + 12);
-        if status == 1.0 {
-            pv.depth[i] = f64::from(word(o));
-            pv.class[i] = word(o + 4);
-            pv.shade[i] = word(o + 8);
-        } else if status == 2.0 {
-            pv.unresolved += 1;
-        }
-    }
-    pv
 }
 
 /// `struct U` in trace.wgsl, field by field.

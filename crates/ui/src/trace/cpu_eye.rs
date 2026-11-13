@@ -135,7 +135,7 @@ impl Drop for CpuEye {
         if let Some(h) = self.handle.take()
             && h.join().is_err()
         {
-            eprintln!("cpu eye: the worker thread ended abnormally");
+            diag_warn!("cpu eye: the worker thread ended abnormally");
         }
     }
 }

@@ -1,10 +1,12 @@
-//! The post's user options (issue #34): the Fanuc Lathe's thread
-//! output - "Threading: G76 cycle / G32 passes" - and the Tormach
-//! PathPilot's end units (#596), each shown under the post picker while
-//! its post is the document's. A pick queues the
+//! The post's user options (issue #34): a lathe post's thread output -
+//! "Threading: G76 cycle / G32 passes" (Fanuc Lathe) or "G76 cycle / G33
+//! passes" (Tormach PathPilot Lathe, #612) - and the Tormach PathPilot's end
+//! units (#596), each shown under the post picker while its post is the
+//! document's, and per-operation smoothing (#616) for every mill post. A
+//! pick queues the
 //! undoable `SetPostOptions`; the widget only reads the singleton.
 //! Provenance: our own panel; the choice's meaning is the post's
-//! (assets/posts/fanuc-lathe.cps).
+//! (assets/posts/fanuc-lathe.cps, assets/posts/tormach-lathe.cps).
 
 use camcraft_app::posting;
 use camcraft_app::schema::{EndUnits, PostOptions, PostRef, ThreadingOutput};
@@ -12,15 +14,28 @@ use egui::Ui;
 
 use crate::state::{CommandKind, State};
 
-/// The threading row, when the document posts through Fanuc Lathe.
-pub(super) fn threading_picker(ui: &mut Ui, state: &mut State) {
-    if posting::post_of(&state.world) != PostRef::Named("Fanuc Lathe".into()) {
-        return;
+/// The pass word a lathe post writes when it does not write the cycle:
+/// G32 (Fanuc) or G33 (LinuxCNC / PathPilot); `None` for a post with no
+/// threading option.
+fn pass_word(post: &PostRef) -> Option<&'static str> {
+    match post {
+        PostRef::Named(n) if n == "Fanuc Lathe" => Some("G32"),
+        PostRef::Named(n) if n == "Tormach PathPilot Lathe" => Some("G33"),
+        _ => None,
     }
+}
+
+/// The threading row, when the document posts through a lathe post
+/// that reads the option.
+pub(super) fn threading_picker(ui: &mut Ui, state: &mut State) {
+    let Some(pass) = pass_word(&posting::post_of(&state.world)) else {
+        return;
+    };
     let now = posting::post_options(&state.world);
+    let passes = format!("{pass} passes");
     let label = |t: ThreadingOutput| match t {
-        ThreadingOutput::G32Passes => "G32 passes",
-        ThreadingOutput::G76Cycle => "G76 cycle",
+        ThreadingOutput::G32Passes => passes.clone(),
+        ThreadingOutput::G76Cycle => "G76 cycle".to_owned(),
     };
     let mut pick: Option<ThreadingOutput> = None;
     ui.horizontal(|ui| {
@@ -35,10 +50,28 @@ pub(super) fn threading_picker(ui: &mut Ui, state: &mut State) {
                 }
             })
             .response
-            .on_hover_text("How a thread posts: one G76 multi-pass cycle the control runs, or every pass as G32 moves");
+            .on_hover_text(format!("How a thread posts: one G76 multi-pass cycle the control runs, or every pass as {pass} moves"));
     });
     if let Some(t) = pick {
         state.pending.push_back(CommandKind::SetPostOptions(PostOptions { threading: t, ..now }));
+    }
+}
+
+/// Per-operation smoothing (#616): off by default (no smoothing words);
+/// on, each operation states its finish or rough tolerance and the post
+/// writes its control's mode. Not offered for the lathe post, which
+/// writes none.
+pub(super) fn smoothing_switch(ui: &mut Ui, state: &mut State) {
+    if posting::post_of(&state.world) == PostRef::Named("Fanuc Lathe".into()) {
+        return;
+    }
+    let now = posting::post_options(&state.world);
+    let mut want = now.smoothing;
+    ui.checkbox(&mut want, "Smoothing per operation").on_hover_text(
+        "write the control's smoothing mode per operation: finishing ops ask their tolerance, roughing ops a looser one from the stock they leave (G64 P, G5.1, G187, CYCLE832, G62) - needs the control's smoothing option on some machines",
+    );
+    if want != now.smoothing {
+        state.pending.push_back(CommandKind::SetPostOptions(PostOptions { smoothing: want, ..now }));
     }
 }
 

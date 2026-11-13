@@ -1,0 +1,30 @@
+{#- Front page (#688): the version the site was built from, and the browser-build note. -#}
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <h1>CamCraft</h1>
+  <p class="lead">{{ config.description }}</p>
+  {% if version %}
+  <p class="version">This site documents <strong>CamCraft {{ version }}</strong>.
+    <a href="{{ config.extra.repo }}/releases/tag/v{{ version }}">Download {{ version }}</a></p>
+  {% else %}
+  <p class="version">This is a local preview of the site, not built from a release tag.
+    <a href="{{ config.extra.repo }}/releases/latest">Download the latest release</a></p>
+  {% endif %}
+</section>
+{{ section.content | safe }}
+<div class="cards">
+  {% set guide = get_section(path="guide/_index.md") %}
+  <div class="card">
+    <h2><a href="{{ guide.permalink }}">{{ guide.title }}</a></h2>
+    <p>{{ guide.description }}</p>
+    <ul>{% for p in guide.pages %}<li><a href="{{ p.permalink }}">{{ p.title }}</a></li>{% endfor %}</ul>
+  </div>
+  {% set dev = get_section(path="developers/_index.md") %}
+  <div class="card">
+    <h2><a href="{{ dev.permalink }}">{{ dev.title }}</a></h2>
+    <p>{{ dev.description }}</p>
+    <ul>{% for p in dev.pages %}<li><a href="{{ p.permalink }}">{{ p.title }}</a></li>{% endfor %}</ul>
+  </div>
+</div>
+{% endblock content %}

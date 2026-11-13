@@ -136,6 +136,21 @@ pub struct ToolBody {
     pub spun: Option<camcraft_tools::spun::SpunProfile>,
     /// The frame, the placement it landed with, and the derived read.
     pub frame: crate::tool_body::BodyFrame,
+    /// #828: the holder is ASSUMED - a machine's `tooling.default_holder`
+    /// landed on a new tool, not a holder the user picked. Judged no
+    /// smaller than the tool's stand-in holder cylinder anywhere
+    /// (`HolderProfile::floored`, in `tool_body::judged`). `false` for
+    /// every body the user lands, and for every older file's.
+    pub machine_default: bool,
+}
+
+/// #93 slice 2: a milling tool's own drawn cutter, neck and shank
+/// outline (`SetToolCutter`, `crate::tool_cutter`). Display data: it
+/// agrees with the tool's numbers by law (`cutter_profile::check`) and
+/// no generator or judging law reads it. Absent = drawn from the numbers.
+#[derive(Component, Debug, Clone, PartialEq)]
+pub struct ToolCutter {
+    pub spun: camcraft_tools::spun::SpunProfile,
 }
 
 impl ToolBody {
@@ -192,6 +207,9 @@ impl ToolBody {
 /// file before v57, reads as #317's implicit rule
 /// ([`crate::setup_stock::implicit`]). Written only by
 /// `SetSetupStockSource` and the project loader.
+/// `post_options` (#389) is the setup's own post options; `None`, the
+/// default and every earlier file, follows the document's `PostOptions`.
+/// Written only by `SetSetupPostOptions` and the project loader.
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct SetupDef {
     pub stock: String,
@@ -203,6 +221,7 @@ pub struct SetupDef {
     pub post: Option<PostRef>,
     pub relative_to: Option<String>,
     pub stock_source: Option<crate::setup_stock::StockSource>,
+    pub post_options: Option<PostOptions>,
 }
 
 /// The M3.2 stage B marker turning a model entity into a FIXTURE: the
@@ -223,6 +242,19 @@ pub struct FixtureDef {
     /// the default, every pre-M13.8 file - turns with it (a chuck) and
     /// is judged in the path's own frame.
     pub fixed: bool,
+    /// A built-in vise's parameters (#788): its facets were generated
+    /// from these, so the jaw opening can be edited and regenerated.
+    /// `None` - every imported fixture - is plain steel.
+    pub vise: Option<crate::vise::ViseParams>,
+    /// Fixture plates (#819): this fixture IS a plate (its hole grid),
+    /// and/or stands ON one at a named location. Default: neither.
+    pub plate: crate::plate::PlateLink,
+    /// A mod-vise jaw block's parameters (#820): its facets were
+    /// generated from these. `None` - every other fixture.
+    pub mod_jaw: Option<crate::modvise::JawParams>,
+    /// A built-in accessory's parameters (#789: parallels, blocks, a
+    /// strap clamp, a soft jaw); `None` - not one.
+    pub accessory: Option<crate::accessory::Accessory>,
 }
 
 /// The document's active setup, stored as a flecs singleton like `Units`:
@@ -380,6 +412,12 @@ pub struct PostOptions {
     pub skip_stops: bool,
     /// One standalone program per operation (#111).
     pub per_op: bool,
+    /// Per-operation smoothing (#616): off (the default) posts no
+    /// smoothing words; on, each op asks its tolerance and the dialect
+    /// writes its control's mode (G64 P, G5.1, G187, CYCLE832, CYCL
+    /// DEF 32), reset at the op's end. Opt-in because several controls
+    /// need an option for it (Fanuc's AI contour control).
+    pub smoothing: bool,
     /// The length unit the control is left in after the program (#596).
     pub end_units: EndUnits,
 }
@@ -412,16 +450,14 @@ pub enum ThreadingOutput {
     G76Cycle,
 }
 
-/// Which theme the document wears (M6.1 C), a flecs singleton like
-/// `PostRef`: setup furniture, never a browser row. `Dark` is the
-/// shipped default - the meaning of a file with no theme key at all;
-/// `Named` addresses a built-in theme BY NAME (the post law, M3.3 B:
-/// names survive growth, indices don't); `File` names the user's
-/// `.json` theme by path. The constructor validates (registry names
-/// exist, files are there and within the byte budget - the JSON parse
-/// itself is the ui seam's, since the parser lives there); a value
-/// landed from a project file reads as written and refuses by name at
-/// apply time, never silently swapping back to the default.
+/// Which theme the user wears (M6.1 C), a flecs singleton. Since #877 a
+/// user preference, not a document setting: `app::prefs` keeps it per
+/// user, and no project file carries it. `Dark` is the shipped default;
+/// `Named` addresses a built-in theme BY NAME (names survive growth,
+/// indices don't); `File` names the user's `.json` theme by path. A pick
+/// is validated before it is set (`commands::check_theme`, plus the ui
+/// seam's JSON parse); a stored `File` reads as written and refuses by
+/// name at apply time, never silently swapping back to the default.
 #[derive(Component, Debug, Clone, Default, PartialEq)]
 pub enum ThemeRef {
     #[default]
@@ -431,9 +467,9 @@ pub enum ThemeRef {
 }
 
 /// The colour-vision remap the viewer wears (M13.4), a flecs singleton
-/// switched by `SetColorVision` under the theme's command law. `Off`
-/// is the default and changes nothing on screen. Unlike `ThemeRef` it
-/// is a VIEW preference, not a document setting: a deficiency belongs
+/// kept per user with the theme (`app::prefs`, #877). `Off` is the
+/// default and changes nothing on screen. Like `ThemeRef` it is a VIEW
+/// preference, not a document setting: a deficiency belongs
 /// to the person at the screen, not to the part - a protan's document
 /// opened by a colleague must not wear the protan palette - so the
 /// project file never carries it and opening a document leaves it as
@@ -506,6 +542,7 @@ pub fn register_schema(world: &World) {
     world.component::<Wcs>();
     world.component::<ToolDef>();
     world.component::<ToolBody>();
+    world.component::<ToolCutter>();
     world.component::<Operation>();
     world.component::<OperationMeta>();
     world.component::<ProgramEntry>();

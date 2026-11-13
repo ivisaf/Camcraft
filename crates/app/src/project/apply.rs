@@ -531,6 +531,7 @@ pub(super) fn check_and_apply(world: &World, mut file: ProjectFile) -> Result<Ve
         // The top-level switches (#110, #111): an absent key is off.
         skip_stops: file.skip_stops,
         per_op: file.per_op_files,
+        smoothing: file.smoothing,
         // #596: an absent key leaves the program's unit modal.
         end_units: match file.post_options.as_ref().and_then(|o| o.end_units.as_deref()) {
             None => crate::schema::EndUnits::Leave,
@@ -561,6 +562,12 @@ pub(super) fn check_and_apply(world: &World, mut file: ProjectFile) -> Result<Ve
                 return Err(corrupt(format!("operation label '{label}' conflicts with another operation")));
             }
         }
+    }
+    // #813: a machine embedded before #804 may hold a table A the
+    // index-swing clause cannot judge; say so by name.
+    notes.extend(super::swing_note::notes(&file));
+    if let Some(r) = file.machine.as_ref().and_then(|m| crate::machine::tooling_refusal(&m.machine)) {
+        return Err(corrupt(format!("machine definition {r}")));
     }
     if let Some(m) = &file.machine
         && !m.machine.is_sane()
@@ -611,19 +618,8 @@ pub(super) fn check_and_apply(world: &World, mut file: ProjectFile) -> Result<Ve
             None => crate::schema::PostRef::Builtin,
         },
     );
-    // Opening lands the theme choice too - including the default, so a
-    // stale singleton from the previous document can never leak in (the
-    // post's law, worn in the theme's clothes). Names and paths land as
-    // written; the shell resolves at draw and a stranger refuses by
-    // name in the status line, never silently wearing `dark`'s ink.
-    crate::commands::theme_set(
-        world,
-        &match file.theme {
-            Some(ThemeDto::Named(name)) => crate::schema::ThemeRef::Named(name),
-            Some(ThemeDto::File(path)) => crate::schema::ThemeRef::File(path),
-            None => crate::schema::ThemeRef::Dark,
-        },
-    );
+    // The theme is not the document's (#877): opening leaves the user's
+    // preference as it is, whatever an older file's `theme` key says.
     // Opening lands the pins too - including the empty default, so a
     // stale singleton from the previous document can never leak in
     // (the theme's law, worn in the pin's clothes).
@@ -699,6 +695,11 @@ pub(super) fn check_and_apply(world: &World, mut file: ProjectFile) -> Result<Ve
                 if let Some(b) = &tdto.body {
                     let body = b.to_body(&dto.name).map_err(corrupt)?;
                     crate::tool_body::set_body(world, &entity, Some(&body));
+                }
+                // #93: validate_kind already refused a cutter that disagrees.
+                if let Some(c) = &tdto.cutter {
+                    let spun = super::tool_body_wire::cutter_from_dto(&tdto.to_tool(), c, &dto.name).map_err(corrupt)?;
+                    crate::tool_cutter::set_cutter(world, &entity, Some(&spun));
                 }
             }
             EntityKind::Operation => {
@@ -778,6 +779,11 @@ pub(super) fn check_and_apply(world: &World, mut file: ProjectFile) -> Result<Ve
                         corrupt(format!("setup '{}' takes its stock from '{w}', which is no stock source", dto.name))
                     })?),
                 };
+                // #389: an unspellable own thread output is a corrupt file.
+                let post_options = match &sdto.post_options {
+                    None => None,
+                    Some(o) => Some(o.to_options(&dto.name).map_err(corrupt)?),
+                };
                 entity.entity_view(world).set(SetupDef {
                     stock: sdto.stock,
                     // `wcs_one` left exactly one name on every setup.
@@ -794,6 +800,7 @@ pub(super) fn check_and_apply(world: &World, mut file: ProjectFile) -> Result<Ve
                     post: sdto.post.as_ref().map(SetupPostDto::to_ref),
                     relative_to: sdto.relative_to.clone(),
                     stock_source,
+                    post_options,
                 });
             }
         }
@@ -802,11 +809,15 @@ pub(super) fn check_and_apply(world: &World, mut file: ProjectFile) -> Result<Ve
         // anything else). Setting it after keeps the geometry-first
         // order of every other load.
         if let Some(f) = &dto.fixture {
-            entity.entity_view(world).set(FixtureDef {
-                setup: f.setup.clone(),
-                fixed: f.fixed,
-            });
+            // #812: a parameter key this build can't read is dropped
+            // with a note, never a failed load.
+            entity.entity_view(world).set(super::fixture_keys::fixture_def(f, &dto.name, &mut notes));
         }
+    }
+    // #819: a place on a plate the file does not hold is dropped, never
+    // left for the next plate of that name to pick up.
+    for name in crate::plate::mount::drop_dangling(world) {
+        notes.push(format!("fixture '{name}': plate location dropped on load: no such plate"));
     }
     Ok(notes)
 }

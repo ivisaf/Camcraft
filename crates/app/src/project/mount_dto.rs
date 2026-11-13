@@ -41,6 +41,9 @@ impl SetupMachineDto {
     /// The live value; a machine stating an impossible limit is a corrupt
     /// file, refused by the setup's name.
     pub fn to_def(&self, setup: &str) -> Result<MachineDef, String> {
+        if let Some(r) = self.machine.as_ref().and_then(crate::machine::tooling_refusal) {
+            return Err(format!("setup '{setup}' mounts a machine whose {r}"));
+        }
         if let Some(m) = &self.machine
             && !m.is_sane()
         {

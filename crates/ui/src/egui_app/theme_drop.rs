@@ -1,11 +1,12 @@
-//! The ribbon's Theme door (#441): the document's look moved off the
+//! The ribbon's Theme door (#441): the user's look moved off the
 //! Stock page onto its own ribbon cell, right of the View door. Its list
 //! offers the switcher rows `State::theme_options` builds (the two
 //! built-ins, the discovered `assets/themes/*.json` files by name, and
 //! Browse for any other file), then the colour-vision modes. A pick
 //! queues `SelectTheme` / `SelectThemeDialog` / `SelectColorVision` -
-//! the same commands the old page combo queued - so Ctrl+Z puts the
-//! previous look back; opening and closing the list is view state.
+//! the same actions the old page combo queued. The pick is a user
+//! preference (#877): kept per user across restarts, never on the undo
+//! history; opening and closing the list is view state.
 //! Provenance: our own code, the hand-drawn dropdown law of the View
 //! and machine doors (panes.rs, layout/mod.rs); no HSMWorks material.
 

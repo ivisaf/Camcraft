@@ -37,6 +37,9 @@ var afterAsk = "";         // the section's PARAM AfterOperation (#110), none wh
 var homedAt = -1;          // linesWritten() just after a trip home (#504): onClose skips its own home when nothing followed
 var coolantOp = "";        // the section's OperationName, for refusals (#150)
 var sectionOpen = false;   // preamble written (a legacy .cl carries no SECTION)
+var smoothTol = 0;          // #616: the section's PARAM Smoothing, mm (0: none asked)
+var smoothMode = "";        // #616: "finish" or "rough"
+var smoothActive = false;   // #616: this section wrote its smoothing words
 var tcpmOn = false;        // G43.4 armed (stage D RTCP): re-armed at tool change
 var lastA = 0, lastB = 0, lastC = 0; // angle words the last block commanded (deg)
 var tiltRefused = false;   // a refusal the gate counts once, not per line
@@ -92,6 +95,37 @@ function msg(s) {  // counted warning where the host offers message()
 // unstated letters), so the presence of A decides; angle memory
 // resets with the arm, so re-arming always commands all three words.
 // A prismatic record never touches the mode - the tilt stays modal.
+function missingLetter(p) {  // the first turning letter no rotary is named for, else ""
+  var rs = (typeof machine !== "undefined" && machine.rotaries) || [];
+  var ls = ["A", "B", "C"];
+  for (var i = 0; i < ls.length; i++) {
+    var v = p[ls[i]];
+    if (!has(v) || Math.abs(v) <= 1e-9) continue;
+    var named = false;
+    for (var j = 0; j < rs.length; j++) {
+      if (String(rs[j].name || "").toUpperCase() === ls[i]) named = true;
+    }
+    if (!named) return ls[i];
+  }
+  return "";
+}
+// #797 review: the machine check judges a lone rotary about X by the
+// angle the table must hold, signed by its stated direction - a [-1,0,0]
+// table holds the negated angle (`judge.rs` `x_rotary_problem`). This
+// dialect writes the stream's A as it comes and never negates it, so on
+// such a table the check's number and the posted one would differ: the
+// pose it passed against the travel is not the word this post writes.
+// Refused by name rather than posted outside the judged travel. A0 is
+// the same word on either sign, so an upright A0 still posts.
+function reversedLoneXRotary() {  // the rotary's name, else ""
+  var rs = (typeof machine !== "undefined" && machine.rotaries) || [];
+  if (rs.length !== 1) return "";
+  var d = rs[0].direction;
+  if (!d || d.length !== 3 || !has(d[0]) || !has(d[1]) || !has(d[2])) return "";
+  var n2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+  if (!(n2 > 0) || d[0] * d[0] < 0.998 * n2 || d[0] > 0) return "";
+  return String(rs[0].name || "A").toUpperCase();
+}
 function tilt(p) {  // words to append, [] if none, null if refused
   if (!has(p.A)) return [];
   if (typeof machine === "undefined" || machine.rtcp !== true) {
@@ -99,6 +133,20 @@ function tilt(p) {  // words to append, [] if none, null if refused
     return null;
   }
   if (inCycle) { msg("tilted move inside a canned-cycle group"); return null; }
+  // #797: the words go out as the stream's letters, so a letter that
+  // turns needs a rotary of that name. The machine check reads a 4th-axis
+  // table's pose through the tool axis (A0 B180 is its A180), which this
+  // dialect does not re-express - so the refusal by letter lives here too.
+  var lost = missingLetter(p);
+  if (lost) {
+    if (!tiltRefused) { tiltRefused = true; msg("tilted move commands " + lost + " - the machine states no " + lost + " rotary"); }
+    return null;
+  }
+  var rev = reversedLoneXRotary();
+  if (rev && Math.abs(p.A) > 1e-9) {
+    if (!tiltRefused) { tiltRefused = true; msg("tilted move on rotary " + rev + ", stated along -X - this dialect posts the stream's angle unnegated, so it would leave the travel the machine check judged"); }
+    return null;
+  }
   if (!tcpmOn) {
     block(["G43.4", "H" + pad2(tNo)]);
     tcpmOn = true;
@@ -305,6 +353,16 @@ function invertedNotes() {
   }
 }
 
+// #901: the unit this post writes - millimetres - stated in a block of
+// its own before any motion, so a control left in inch by power-on or
+// the last program never reads mm numbers as inches (RS-274 / ISO 6983:
+// G20 inch, G21 mm; the family's published manual puts G20 / G21 in a
+// block of its own at the program's start). Where the program's unit is
+// chosen, and inch output, is #902.
+function unitBlock() {
+  block(["G21"]);
+}
+
 function onOpen() {
   var nm = (typeof machine !== "undefined" && machine.name) || "CAMCRAFT";
   writeln("%");
@@ -312,9 +370,12 @@ function onOpen() {
   // every other comment text, so `Tormach 770MX (ML)` never nests.
   block([oWord(), "(" + (clean(nm) || "CAMCRAFT") + ")"]);
   invertedNotes();
+  unitBlock();
 }
 
 function onParameter(name, value) {
+  if (name === "Smoothing") { smoothTol = Number(value) || 0; return; }
+  if (name === "SmoothingMode") { smoothMode = String(value || ""); return; }
   commentParam(name, value);
   if (name === "OperationName") coolantOp = String(value || "");
   if (name === "Coolant") { coolantAsk = String(value || "flood"); return; }
@@ -346,9 +407,29 @@ function onToolChange(number, name) {
 // it at onSection; a legacy .cl (no records at all) gets it at its
 // first motion - a posted program without an offset or a spindle is
 // not a posted program.
+// #616: per-operation smoothing. Fanuc's G5.1 Q1 (AI contour control)
+// states no tolerance - the deviation is the control's own parameter, so
+// a word written here could not be held to the op's ask (review of
+// #635). The ask is named once and nothing is written until a bounded
+// form is stated per control (#614's Doosan DNM).
+var smoothNamed = false;
+function smoothOn() {
+  if (!(smoothTol > 0) || smoothNamed) return;
+  note("SMOOTHING NOT WRITTEN - G5.1 STATES NO TOLERANCE");
+  smoothNamed = true;
+}
+function smoothOff() {
+  smoothActive = false;
+  smoothTol = 0;
+  smoothMode = "";
+}
+
 function startPreamble() {
   if (sectionOpen) return;
   sectionOpen = true;
+  // #574: a touch probe (a stated speed of 0) states its spindle
+  // stopped before its first move, whatever the tool change did.
+  var probeStop = spindleWait && !(sRpm > 0);
   opNotes();
   block(["G90", wcsWord, "G40", "G49", "G80"]);
   if (toolWait) {
@@ -361,8 +442,10 @@ function startPreamble() {
     block(["S" + ff(sRpm), "M3"]);
     spindleWait = false;
   }
+  if (probeStop) block(["M5"]);
   coolant = coolantFor(coolantAsk);
   if (coolant) block([coolant]);
+  smoothOn();
 }
 
 // The op's after-action (#110), written once its spindle has stopped:
@@ -393,6 +476,7 @@ function endPreamble() {
   if (!sectionOpen) return;
   restorePlane();            // M11.2 A: the plane never leaks past its section
   sectionOpen = false;
+  smoothOff();
   if (inCycle) block(["G80"]);
   inCycle = false;
   if (compOn || compG) {

@@ -15,7 +15,7 @@ use super::{ErrorScope, State};
 impl State {
     /// "Export library…": ask where, then write every document tool.
     pub(crate) fn export_tool_library_dialog(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
+        let Some(path) = crate::file_dialog::FileDialog::new()
             .add_filter("CamCraft Tool Library", &[EXTENSION])
             .set_file_name(format!("tools.{EXTENSION}"))
             .save_file()
@@ -27,7 +27,7 @@ impl State {
 
     /// "Import library…": pick a file, then import it.
     pub(crate) fn import_tool_library_dialog(&mut self) {
-        let picked: Option<PathBuf> = rfd::FileDialog::new()
+        let picked: Option<PathBuf> = crate::file_dialog::FileDialog::new()
             .add_filter("CamCraft Tool Library", &[EXTENSION, "json"])
             .pick_file();
         if let Some(path) = picked {

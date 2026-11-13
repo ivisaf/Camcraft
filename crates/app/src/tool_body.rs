@@ -108,7 +108,7 @@ pub fn build(source: &str, axis: [f64; 3], offset: f64, placed: Vec<Triangle>) -
         .map(|t| [[t.a.x, t.a.y, t.a.z], [t.b.x, t.b.y, t.b.z], [t.c.x, t.c.y, t.c.z]])
         .collect();
     let profile = HolderProfile::envelope(&tris).map_err(|e| e.to_string())?;
-    Ok(ToolBody { source: source.to_owned(), facets: Arc::from(placed), frame: BodyFrame::Spindle { axis, offset, profile }, spun: None })
+    Ok(ToolBody { source: source.to_owned(), facets: Arc::from(placed), frame: BodyFrame::Spindle { axis, offset, profile }, spun: None, machine_default: false })
 }
 
 /// What a drawn (spun) holder body is called where a file name would be.
@@ -127,6 +127,7 @@ pub fn build_spun(spun: SpunProfile) -> ToolBody {
         facets: Arc::from(facets),
         frame: BodyFrame::Spindle { axis: [0.0, 0.0, 1.0], offset: 0.0, profile: spun.holder_profile() },
         spun: Some(spun),
+        machine_default: false,
     }
 }
 
@@ -157,7 +158,8 @@ pub fn fits(tool: &Tool, body: &ToolBody) -> Result<(), String> {
 
 /// The tool as every judging law should read it, and the body behind
 /// it: unchanged with no body; with one, the holder widened to the
-/// cylinder enclosing the body. Refuses by name when the body no longer
+/// cylinder enclosing the body - a machine-default body (#828) first
+/// floored at the tool's own holder cylinder, an explicit one as drawn. Refuses by name when the body no longer
 /// fits the tool (a later edit shortened the shank under it). A lathe
 /// body (#369) leaves the record as it is: the revolved-stock law
 /// reads it (`tool_body_lathe::clearance_of`), no cylinder law does.
@@ -169,6 +171,9 @@ pub fn judged(world: &World, entity: &Entity, tool: Tool) -> Result<(Tool, Optio
     match body.frame {
         BodyFrame::Lathe { .. } => Ok((tool, None)),
         BodyFrame::Spindle { profile, .. } => {
+            // #828: an assumed (machine-default) holder never judges
+            // looser than the stand-in cylinder the bare tool gets.
+            let profile = if body.machine_default { profile.floored(&tool.geom()) } else { profile };
             let enclosed = profile.enclose(&tool).ok_or("the tool body reaches into the flutes")?;
             Ok((enclosed, Some(profile)))
         }
@@ -186,7 +191,12 @@ pub fn stack(geom: &ToolGeom, body: Option<&HolderProfile>) -> HolderStack {
 /// digest moves), the envelope's bands with one - the only numbers a
 /// law reads off it.
 pub fn digest(world: &World, entity: &Entity, h: &mut impl std::hash::Hasher) {
-    match body_of(world, entity).map(|b| b.frame) {
+    let body = body_of(world, entity);
+    // #828: an assumed holder is judged floored - its own stamp term.
+    if body.as_ref().is_some_and(|b| b.machine_default) {
+        h.write(b"machine-default");
+    }
+    match body.map(|b| b.frame) {
         None => {}
         Some(BodyFrame::Spindle { profile, .. }) => {
             h.write(b"tool-body");

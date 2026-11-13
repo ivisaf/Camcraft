@@ -5,7 +5,8 @@
 //! with_area`, and undo back to the previous source - every refusal a
 //! tool error, never a panic.
 //!
-//! Gate map (#180): covers app::mcp (pick, features, area, tools),
+//! Gate map (#180): covers app::mcp (pick, features, area, tools,
+//! fixture_tools locate_part mate ids, #692),
 //! app::commands (SetOperationGeometry, EditOperationParams).
 
 use camcraft_app::mcp::Server;
@@ -300,4 +301,91 @@ fn bad_picks_are_tool_errors_never_a_panic() {
     let g = c.ok("get_operation_geometry", json!({ "operation": "P1" }));
     assert_eq!(g["source"], json!({ "model": "part" }), "{g}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A 20 mm, 10 tall, 16-sided boss as ASCII STL.
+fn write_boss_stl(path: &Path) {
+    let mut s = String::from("solid boss\n");
+    for t in camcraft_app::geometry::cylinder(20.0, 10.0, 16).facets.iter() {
+        s.push_str(" facet normal 0 0 0\n  outer loop\n");
+        for p in [t.a, t.b, t.c] {
+            s.push_str(&format!("   vertex {} {} {}\n", p.x, p.y, p.z));
+        }
+        s.push_str("  endloop\n endfacet\n");
+    }
+    s.push_str("endsolid boss\n");
+    std::fs::write(path, s).expect("write stl");
+}
+
+/// #692: list_features names only what a click can pick - a cylinder's
+/// two rims are its chains (never the 16 facet seams of its wall), and a
+/// round rim has no feature points (its chord vertices are not corners);
+/// a seam chain asked for by id is refused by the one rule.
+#[test]
+fn listed_chains_and_vertices_follow_the_one_pick_rule() {
+    let dir = tmp_dir("rule");
+    let stl = dir.join("boss.stl");
+    write_boss_stl(&stl);
+    let mut c = Client::new();
+    let imp = c.ok("import_model", json!({ "path": stl.display().to_string() }));
+    let name = imp["model"].as_str().expect("model name").to_owned();
+    let f = c.ok("list_features", json!({ "model": name, "kinds": ["chains", "vertices"] }));
+    assert_eq!(f["chains_total"], json!(2), "two rims, no wall seams: {f}");
+    assert!(f["chains"].as_array().is_some_and(|cs| cs.iter().all(|c| c["closed"] == json!(true))), "{f}");
+    assert_eq!(f["vertices_total"], json!(0), "a round rim has no corner: {f}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #692: `locate_part` takes its mate ids by the same rule - a vertex
+/// along a round rim (a chord end, never a corner) is refused as a mate
+/// point by name, like every other pick made by id.
+#[test]
+fn locate_part_refuses_a_mate_point_no_click_could_pick() {
+    use camcraft_app::commands::{Command, ImportModel};
+    use camcraft_app::geometry::feature;
+    let dir = tmp_dir("locate-rule");
+    let (boss, vise) = (dir.join("boss.stl"), dir.join("vise.stl"));
+    write_boss_stl(&boss);
+    write_pocket_stl(&vise);
+    // The rim vertex's id, read off the same file in a world of our own:
+    // ids are geometry hashes, so the server's model names it alike.
+    let world = camcraft_app::world::new_world();
+    ImportModel::new(&boss).expect("the boss imports").apply(&world);
+    let (name, e) = camcraft_app::model::named_entities(&world).into_iter().next().expect("the boss");
+    let f = camcraft_app::model::features_of(&world, &e).expect("features");
+    let g = camcraft_app::pick::graph_of(&world, &name).expect("graph");
+    let rim = feature::corner_verts(&f)
+        .into_iter()
+        .filter_map(|v| feature::vertex_id(&f, v))
+        .find(|id| !g.points.iter().any(|p| p.id == *id))
+        .expect("a vertex along the rim");
+
+    let mut c = Client::new();
+    let part = c.ok("import_model", json!({ "path": boss.display().to_string() }))["model"].as_str().expect("name").to_owned();
+    let steel = c.ok("import_model", json!({ "path": vise.display().to_string() }))["model"].as_str().expect("name").to_owned();
+    c.ok("add_fixture", json!({ "model": steel }));
+    let top = flat_face(&mut c, &steel, 20.0);
+    let mate = |part_id: &str| json!({ "part": part, "fixture": steel, "mates": [{ "part": part_id, "fixture": top }] });
+    let before = c.ok("get_job", json!({}));
+    let e = c.refused("locate_part", mate(&format!("vertex:{rim:#018x}")));
+    assert!(e.contains("not a feature point"), "{e}");
+    // Refused at the door: placements, undo/redo state, all as they were.
+    assert_eq!(c.ok("get_job", json!({})), before, "a refused locate changes nothing");
+    // The check refuses no click-pickable mate: the boss's flat bottom seats on the vise top.
+    let bottom = flat_face(&mut c, &part, 0.0);
+    c.ok("locate_part", mate(&bottom));
+    let job = c.ok("get_job", json!({}));
+    let boss = job["models"].as_array().and_then(|m| m.iter().find(|m| m["name"] == json!(part))).expect("the boss");
+    assert!(boss["bounds"]["min"][2].as_f64().is_some_and(|z| (z - 20.0).abs() < 1e-6), "seated on the top at Z 20: {boss}");
+    // One undo step back: the refusal added none, so this undoes the locate.
+    c.ok("undo", json!({}));
+    assert_eq!(c.ok("get_job", json!({}))["models"], before["models"], "undo restores the placements");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The id of `model`'s flat face lying at world Z `z` ("facing" is winding-free).
+fn flat_face(c: &mut Client, model: &str, z: f64) -> String {
+    let f = c.ok("list_features", json!({ "model": model, "kinds": ["faces"] }));
+    let at = |fa: &&Value| [fa["bounds"]["min"][2].as_f64(), fa["bounds"]["max"][2].as_f64()] == [Some(z); 2];
+    f["faces"].as_array().and_then(|fs| fs.iter().find(at)).and_then(|fa| fa["id"].as_str()).map(str::to_owned).unwrap_or_else(|| panic!("{model}: no face at Z {z}: {f}"))
 }

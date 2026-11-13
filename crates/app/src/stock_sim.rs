@@ -266,8 +266,9 @@ pub(crate) fn plan_program(world: &flecs_ecs::prelude::World) -> Result<Vec<Plan
     // full radius at the corner depth); a bull nose sweeps its exact
     // corner-rounded solid (M13.1 - the disc it rode before removed
     // the fillet's ring the real tool leaves); everything whose cut
-    // IS its cylinder - end mills, drills, taps, bores - sweeps the
-    // disc.
+    // IS its cylinder - end mills, drills, bores - sweeps the disc,
+    // and a tap sweeps the disc of its thread's core (#266,
+    // `tool_law::cutting_radius`).
     let mut planned: Vec<Planned> = Vec::with_capacity(ops.len());
     for (name, e) in &ops {
         let op = model::operation_of(world, e)
@@ -292,7 +293,12 @@ pub(crate) fn plan_program(world: &flecs_ecs::prelude::World) -> Result<Vec<Plan
         // meets the part tangent, and the protected-move law in
         // `operation::probe_op` already convicted any other meeting -
         // so the probe op carves nothing and stays out of the plan.
-        if tool.kind == crate::tools::ToolKind::Probe {
+        // A plasma torch (#670) cuts THROUGH the plate along a kerf the
+        // dexel column model has no atom for: the plasma verdicts (cut
+        // order, kerf crossings, the through-cut) are #672's laws, and
+        // the generator certified that no lit move's kerf reaches the
+        // part - so the torch carves nothing here, said not silenced.
+        if matches!(tool.kind, crate::tools::ToolKind::Probe | crate::tools::ToolKind::Torch) {
             continue;
         }
         let cache = model::toolpath_of(world, e)
@@ -319,15 +325,20 @@ pub(crate) fn plan_program(world: &flecs_ecs::prelude::World) -> Result<Vec<Plan
         // the plan carries the nose and that axis for the field eye's
         // revolved stadium, a blade its own footprint (`lathe`, #21).
         let lathe = lathe::lathe_plan(world, name, &op, &tool, &cache.path.moves)?;
+        // A turning insert's cutting feature is its nose (a blade's,
+        // half its band - `LathePlan::feature`): the display cell law
+        // (`auto_cell`) reads it, not the IC. Every other tool sweeps
+        // its cutting radius - a tap its thread's core (#266).
+        let radius = match lathe {
+            Some(plan) => plan.feature(),
+            None => crate::operation::tool_law::cutting_radius(&tool).map_err(|e| format!("{name}: {e}"))?,
+        };
         planned.push(Planned {
             name: name.clone(),
             moves: cache.path.moves,
             // #529: only what the op itself declared, never wider.
             breaks: breaks::bounded(name, &op.params, cache.path.breaks),
-            // A turning insert's cutting feature is its nose (a
-            // blade's, half its band - `LathePlan::feature`): the
-            // display cell law (`auto_cell`) reads it, not the IC.
-            radius: lathe.map_or(tool.diameter / 2.0, |l| l.feature()),
+            radius,
             ball: tool.kind == crate::tools::ToolKind::BallNose,
             cone,
             corner,

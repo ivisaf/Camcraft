@@ -64,3 +64,20 @@ fn the_door_opens_the_window_copy_copies_and_the_door_closes_it() {
     assert!(!h.state().debug_info_open);
     assert!(h.query_by_label("Copy").is_none(), "the door closed it");
 }
+
+#[test]
+fn the_title_row_folds_the_window_and_its_close_button_closes_it() {
+    // #698: the window draws its own caption row (window_chrome).
+    let mut h = harness();
+    h.get_by_label("Debug info").click();
+    h.run();
+    h.get_by_label("Collapse window").click();
+    h.run();
+    assert!(h.query_by_label("Copy").is_none(), "folded to the title row");
+    h.get_by_label("Expand window").click();
+    h.run();
+    assert!(h.query_by_label("Copy").is_some(), "unfolded again");
+    h.get_by_label("Close window").click();
+    h.run();
+    assert!(!h.state().debug_info_open, "close closes it");
+}

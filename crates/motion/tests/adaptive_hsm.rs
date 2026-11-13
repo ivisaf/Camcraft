@@ -199,14 +199,14 @@ fn run(reg: &Region, strategy: PocketStrategy, cell: f64) -> (Toolpath, PathQual
     // The stock stands one stepdown above Top: the ladder's first level
     // (at Top) is a real cut, not the zero-depth skin.
     let Ok(mut dex) = stock_for(reg, 5.0, BOTTOM, 1.0, &spec) else { panic!("stock") };
-    let q = measure(&path, &mut dex, &spec);
+    let q = measure(&path, &mut dex, &spec).unwrap();
     if let Ok(dir) = std::env::var("HSM_DUMP") {
         dump(&dir, reg, &path, &q, strategy);
     }
     // Rest inside what a D10 can reach, a grid cell and a half in.
     let reach = reg.offset(-(D * 0.5)).and_then(|c| c.offset(D * 0.5 - 2.0 * cell));
     let Ok(reach) = reach else { panic!("reach") };
-    (path, q, rest_area(&dex, &reach, BOTTOM))
+    (path, q, rest_area(&dex, &reach, BOTTOM).unwrap())
 }
 
 /// Debug aid (opt-in by `HSM_DUMP=<dir>`): the region's loops and every
@@ -383,6 +383,35 @@ fn hsm_on_the_user_bore_enters_once_and_holds_every_law() {
     // heavy lane's (10%), this one only catches a regression.
     let bad = judge(name, &reg, (D / 60.0, 0.35), false);
     assert!(bad.is_empty(), "{bad:#?}");
+}
+
+/// Issue #850: the island's growth plan never finishes; it ran about a
+/// minute (release) before the length budget refused it. The geometry
+/// budget refuses it about halfway into its first margin attempt, by
+/// name, and the Offset rings cut it, named - verifier silent. The
+/// count in the note is deterministic: past the 600 k budget by at most
+/// one revolution (~6 k on the island). The wall clock is a loose
+/// backstop only, so a loaded machine cannot fail it. Its fast twin in
+/// the default suite (the same refusal at lowered limits) is
+/// `adaptive::budget::fixtures::the_island_trips_lowered_geometry_limits_by_name`.
+#[test]
+#[ignore = "heavy lane: release --ignored (the island grown to the 600 k geometry budget, 46-59 s debug)"]
+fn the_island_is_refused_by_the_geometry_budget_in_seconds() {
+    let (_, reg) = fixtures().swap_remove(3);
+    let t0 = std::time::Instant::now();
+    let Ok(t) = pocket(&reg, &params(PocketStrategy::Adaptive)) else { panic!("pocket") };
+    let secs = t0.elapsed().as_secs_f64();
+    eprintln!("island: {secs:.1} s, {:?}", t.notes);
+    let Some(n) = t.notes.iter().find(|n| n.contains("too detailed") && n.contains("Offset rings cut this pocket instead")) else {
+        panic!("refused by the geometry budget, by name: {:?}", t.notes)
+    };
+    let k = n.split("both limits passed, ~").nth(1).and_then(|s| s.split(" k").next()).and_then(|s| s.parse::<f64>().ok());
+    assert!(k.is_some_and(|k| (600.0..=620.0).contains(&k)), "the count past the budget by at most a revolution: {n}");
+    assert!(!t.moves.is_empty() && t.is_chained() && t.all_finite(), "the Offset rings cut it");
+    let w = verified(&t, &reg, D);
+    assert!(w.is_empty(), "{} {:?}", warn_kinds(&w), t.notes);
+    let limit = if cfg!(debug_assertions) { 600.0 } else { 60.0 };
+    assert!(secs < limit, "{secs:.1} s");
 }
 
 /// Issue #5 round 2: the channel the spiral refuses is tried as a

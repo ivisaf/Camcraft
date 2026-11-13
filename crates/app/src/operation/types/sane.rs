@@ -33,6 +33,8 @@ impl OpParams {
         tilt_ok
             && links_ok
             && match self {
+            // The plasma door (#670): the parameter set's own sanity.
+            OpParams::PlasmaProfile(p) => p.is_sane(),
             // The probe's door (#108): every distance and feed a real
             // number, the measure no faster than the seek, the back-off
             // inside the approach, a slot G54..G59 when one is named.
@@ -689,6 +691,50 @@ impl OpParams {
                     && pos(*feed)
                     && pos(*plunge_feed)
             }
+            OpParams::TrochoidalSlot {
+                a,
+                b,
+                width,
+                loop_width,
+                step,
+                max_engagement,
+                ret,
+                smoothing,
+                stock_to_leave,
+                clearance_z,
+                retract_z,
+                top_z,
+                bottom_z,
+                stepdown,
+                feed,
+                return_feed,
+                plunge_feed,
+                ..
+            } => {
+                a.x.is_finite()
+                    && a.y.is_finite()
+                    && b.x.is_finite()
+                    && b.y.is_finite()
+                    && pos(*width)
+                    && loop_width.is_none_or(pos)
+                    && pos(*step)
+                    && pos(*max_engagement)
+                    && *max_engagement <= 180.0
+                    && match ret {
+                        crate::machining2d::TrochoidReturn::Microlift { height } => pos(*height),
+                        crate::machining2d::TrochoidReturn::Retract => true,
+                    }
+                    && nneg(*smoothing)
+                    && nneg(*stock_to_leave)
+                    && clearance_z.is_sane()
+                    && retract_z.is_none_or(|r| r.is_sane())
+                    && top_z.is_sane()
+                    && bottom_z.is_sane()
+                    && pos(*stepdown)
+                    && pos(*feed)
+                    && pos(*return_feed)
+                    && pos(*plunge_feed)
+            }
             OpParams::Trace {
                 clearance_z,
                 retract_z,
@@ -1069,5 +1115,24 @@ impl OpParams {
                     && holes.iter().all(|h| h.is_usable())
             }
         }
+    }
+
+    /// The trochoidal slot's microlift bound (#774), on resolved heights:
+    /// the lifted return is a feed move, so it may rise at most the
+    /// clearance plane's height above the cut top - never feed above the
+    /// clearance plane. `None` for every other kind and for Retract.
+    /// Asked by the commands' heights door with `clearance` and `top`
+    /// resolved; the motion layer holds the same law as a backstop.
+    #[must_use]
+    pub fn microlift_refusal(&self, clearance: f64, top: f64) -> Option<String> {
+        let OpParams::TrochoidalSlot { ret: crate::machining2d::TrochoidReturn::Microlift { height }, .. } = self else {
+            return None;
+        };
+        let room = clearance - top;
+        (*height > room + 1e-9).then(|| {
+            format!(
+                "a {height:.3} mm microlift would feed the trochoidal slot's return above the clearance plane - at most {room:.3} mm (the clearance above the top) fits; use the Retract return to hop higher"
+            )
+        })
     }
 }

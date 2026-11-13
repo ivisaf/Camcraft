@@ -20,7 +20,7 @@ use crate::operations::fold_warnings_located;
 const MARK_ARMS: f64 = 1.5;
 
 /// The colour one move draws in: the gouge colour when warned, else its
-/// kind's - scaled by `dim` (unselected paths under "show all").
+/// kind's - dimmed by `dim` (unselected paths under "show all").
 #[must_use]
 pub(crate) fn move_colour(pal: &Semantic, kind: MoveKind, warned: bool, dim: f32) -> [f32; 3] {
     let base = if warned {
@@ -32,11 +32,12 @@ pub(crate) fn move_colour(pal: &Semantic, kind: MoveKind, warned: bool, dim: f32
             MoveKind::Plunge => pal.plunge,
         }
     };
-    [base[0] * dim, base[1] * dim, base[2] * dim]
+    // #698: a light ground fades a dimmed path toward itself, not black.
+    crate::egui_app::ground_ink::dimmed(base, dim, crate::egui_app::theme::current().viewport)
 }
 
 fn over_budget(out: &mut Vec<[f32; 6]>) {
-    eprintln!(
+    diag_warn!(
         "overlay: the cached paths outgrew the {MAX_OVERLAY_VERTICES}-vertex \
          display budget; the rest is truncated (the full path still posts)"
     );

@@ -203,11 +203,14 @@ go to `CHANGELOG.md`.
   `gh issue edit N --add-label claimed --add-assignee @me` plus a comment
   `gh issue comment N --body "claimed: <session or agent name> · <UTC time> ·
   worktree/branch <name> · plan: <one line>"`. Never work an issue that
-  carries `claimed` unless its last claim comment is an agent's and older
-  than 4 hours with no newer comment from the claimant - then it is stale:
-  comment "reclaimed from <old claimant> (stale)" and take it. A
-  contributor's claim comment never goes stale on a timer ("A claim comment
-  is a claim", below).
+  carries `claimed`, with two exceptions. One: its last claim comment is
+  one of the owner account's own agents' and older than 4 hours with no
+  newer comment from the claimant - then it is stale: comment "reclaimed
+  from <old claimant> (stale)" and take it. Two: the claim behind the
+  label is a contributor's and it is withdrawn, released or stale by the
+  rule "A claim comment is a claim", below - then release it as that rule
+  says, and the issue is free. Never on a `P?` issue: no agent relabels or
+  works one.
 - **Agent-opened issues say so** (user, 2026-11-07: "All Issues opened by
   an Agent should have the tag source:agent"). Every issue an agent opens
   carries the `source:agent` label alongside its `P*`, `effort:*` and `area:*` labels -
@@ -231,6 +234,11 @@ go to `CHANGELOG.md`.
   - **Set at filing.** Whoever files an issue sets its effort label with
     its `P*` and `area:*`, from the table. A human-filed issue without
     one gets it at triage (the first agent that reads it for a pick).
+    The `classify-effort` skill (`.claude/skills/classify-effort/`) is how
+    the label is chosen: `/classify-effort <N>` for one issue,
+    `/classify-effort` for every open issue without one,
+    `/classify-effort audit` to list labels that look wrong (read-only).
+    It only sets a missing label; it never lowers or replaces one.
   - **Safety floor.** Anything that can change posted G-code, a collision
     or gouge check, stock simulation or geometry is at least
     `effort:high`, however small the diff; every `P0` is at least
@@ -263,7 +271,9 @@ go to `CHANGELOG.md`.
   suffice ... if we come across a claimed issue thru comment we should
   just label it as such - and vice versa if they remove their comment,
   remove their claim label for em as part of maintenance.. Otherwise the
-  comment stands as claimed."). Only collaborators can set labels, so
+  comment stands as claimed." - that last sentence is superseded since
+  2026-11-11: a claim stands only while it is live, below). Only
+  collaborators can set labels, so
   anyone else claims an issue by commenting on it with a line starting
   `claimed:` (or `/claim`). The comment is the claim; the label only
   mirrors it.
@@ -271,22 +281,54 @@ go to `CHANGELOG.md`.
     issue's comments (`gh issue view N --comments`). A claim comment by
     anyone other than the owner account (agents post as the owner) means
     the issue is taken: do not work it, even if it has no `claimed` label -
-    unless that same person later commented `unclaim` (a withdrawn claim).
-  - **Mirror it.** An issue found with such a comment but without the
+    unless the claim is withdrawn, released or stale (below).
+  - **Mirror it.** An issue with a live claim comment (next point) but no
     label gets `claimed` and the claimant as assignee (if GitHub refuses
     the assignee, the label alone), plus one reply: "Claim recorded for
     @<login> - label and assignee set (only collaborators can set labels;
-    your comment is the claim)."
-  - **Withdrawn = deleted.** A contributor's claim stands for as long as
-    their claim comment exists - the 4 h stale rule is for agent claims
-    only. If the comment is deleted, or the claimant comments `unclaim`,
-    the claim is gone: remove `claimed` and their assignment, and comment
-    "claim by @<login> withdrawn (comment removed) - issue is free again".
+    your comment is the claim)." Only a LIVE earlier claim by someone else
+    holds an issue against a new claimant; a stale or ended one does not.
+    When a new claimant comes over a stale earlier claim, release the
+    stale one first (its release comment ends it, next point), then mirror
+    the new claim: the label and the assignee always follow the newest
+    live claim.
+  - **A claim must be live - an old one cannot stall an issue** (user,
+    2026-11-11, on eight issues a contributor's agents had claimed days
+    earlier and left: "unclaim those 8 old ones and let someone pick em up
+    and fix em they can't stall"). A contributor's claim is live while at
+    least one of these holds: an open PR by the claimant for the issue; a
+    commit on the claimant's branch for it in the last 48 hours; or a
+    comment by the claimant on the issue in the last 48 hours (the claim
+    itself, progress, findings - any comment of theirs counts; the rule is
+    kept simple on purpose). Research claims have no branch, so the
+    comment is what keeps them live. With none of the three, the claim is
+    **stale**: do not mirror it; if it carries `claimed`, remove the label
+    and the assignment and comment "claim by @<login> released (stale: no
+    open PR, branch commit or comment from the claimant for 48 h) - issue
+    is free again; claim it again with a new comment if you are working on
+    it". That comment ENDS the claim (next point): a later comment by the
+    claimant does not revive it, only a new claim line does. Ended beats
+    live: a comment that withdraws or releases a claim is not activity
+    that keeps it live, and an ended claim is never live again. The 4 h rule
+    above stays the rule for the owner account's own agents. A `P?` issue
+    is never relabelled by an agent, stale claim or not: report it to the
+    maintainer instead.
+  - **Withdrawn or released.** A claim also ends when its comment is
+    deleted; when the claimant's later comment withdraws it (`unclaim`,
+    `/unclaim`, "claim withdrawn", "releasing this claim", "the issue is
+    free" - read the claimant's LAST comment, not only the claim line);
+    when the maintainer releases it (a comment saying the claim is
+    released by the maintainer); or when an agent has released it as stale
+    (the comment above). Then: remove `claimed` and their assignment, and
+    comment "claim by @<login> withdrawn - issue is free again" (not needed
+    where a release comment already says so). Only a NEW `claimed:` /
+    `/claim` comment posted after that is a claim again; an ended claim is
+    never mirrored back from its old comment.
   - **Maintenance.** Every `/review-prs` run (step 4) and every issue pick
-    does this sweep for the issues it touches: label the comment-only
-    claims, and drop the label where the only claim comment behind it is
-    gone. A `claimed` label backed by an agent's claim comment follows the
-    4 h rule above instead.
+    does this sweep for the issues it touches: label the live
+    comment-only claims, and drop the label where the claim behind it is
+    withdrawn, released or stale. A `claimed` label backed by one of the
+    owner account's own agent claims follows the 4 h rule above instead.
 - **`needs-research` is research, not code** (user, 2026-11-08: "the new
   label needs-research ... covers larger open questioned issues that needs
   to be broken down into issues and closed, before work can be picked up").
@@ -547,6 +589,21 @@ gate <tier>`, from the workspace's `xtask/` crate. `scripts/gate.ps1`
 
 Any tier takes `--dry-run` to print its plan without running it; logs go
 to `gate-logs/<tier>-<timestamp>/`.
+
+**Shared compile cache (optional, #900).** Every worktree has its own
+`target/`, so a fresh one recompiles every third-party crate. With
+[sccache](https://github.com/mozilla/sccache) (`cargo install sccache
+--locked`, user account only) those compilations are cache hits across
+worktrees. `cargo xtask gate` sets `RUSTC_WRAPPER=sccache` and
+`SCCACHE_CACHE_SIZE=20G` for its cargo calls when `sccache` is on PATH (an
+existing `RUSTC_WRAPPER`, or `CAMCRAFT_NO_SCCACHE=1`, wins); a machine without
+it builds as before, and release packaging never uses it. For plain `cargo`
+set `RUSTC_WRAPPER=sccache` only when `sccache` is on PATH (cargo fails if the wrapper is missing), and never export `CARGO_TARGET_DIR`; `cargo xtask release` clears any wrapper for the packaging build. The cache lives in the sccache
+default dir (Windows `%LOCALAPPDATA%\Mozilla\sccache\cache`, Linux
+`~/.cache/sccache`; `SCCACHE_DIR` moves it). Hits need each worktree's default
+`target/`: sccache hashes `CARGO_*` env vars, so a `CARGO_TARGET_DIR` env var
+makes every worktree miss. Dev builds carry line tables only (no variable
+debug info; `--config profile.dev.debug=true` restores it for a debugger).
 
 **GitHub Actions minutes are budgeted** (3000/month; Windows bills 2x,
 macOS 10x). Nothing runs on push or PR: every gate tier runs locally

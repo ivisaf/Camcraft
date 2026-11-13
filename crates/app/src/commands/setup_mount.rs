@@ -56,6 +56,11 @@ impl SetSetupMachine {
     ) -> Result<Self, CommandError> {
         let def = def_of(world, setup)?;
         if let Some((_, Some(m))) = &next
+            && let Some(r) = crate::machine::tooling_refusal(m)
+        {
+            return Err(CommandError::Invalid(format!("machine {r}")));
+        }
+        if let Some((_, Some(m))) = &next
             && !m.is_sane()
         {
             return Err(CommandError::Invalid(
@@ -88,7 +93,7 @@ impl SetSetupMachine {
     pub fn from_file(world: &World, setup: &str, path: &std::path::Path) -> Result<Self, CommandError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| CommandError::Invalid(format!("machine file {}: {e}", path.display())))?;
-        let m = crate::machine::parse_mch(&text).map_err(CommandError::Invalid)?;
+        let m = crate::machine::parse_mch(&text).map_err(|e| CommandError::Invalid(format!("{}: {e}", path.display())))?;
         Self::new(world, setup, Some((path.display().to_string(), Some(m))))
     }
 

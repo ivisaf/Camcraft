@@ -20,7 +20,7 @@ impl State {
     /// unreadable file starts empty and says so on the status line.
     pub(crate) fn load_recent(&mut self) {
         let Some(path) = recent::store_path() else {
-            eprintln!("recent files: no config folder - the lists last for this session only");
+            diag_warn!("recent files: no config folder - the lists last for this session only");
             return;
         };
         self.load_recent_from(path);

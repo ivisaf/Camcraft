@@ -11,8 +11,8 @@
 //! as the machining-dynamics literature defines it (Altintas,
 //! *Manufacturing Automation*, ch. 2: the arc of the cutter periphery
 //! in contact with the workpiece; for a straight wall
-//! `acos(1 - 2 ae/D)`), sampled on the existing dexel stock engine
-//! (`camcraft_sim::stock_sim::Dexel`, public API only) the way
+//! `acos(1 - 2 ae/D)`), sampled on the existing stock engine through
+//! its seam (`camcraft_sim::stock_sim::Stock`, column arm; M7.3) the way
 //! simulation-based engagement studies measure it (e.g. Kloypayan &
 //! Lee 2002, material engagement from an in-process stock model). The
 //! rim is read a cell and a half inside the cutter (the grid never reads
@@ -27,7 +27,7 @@ mod tests;
 use crate::cl::{Move, MoveKind, Toolpath};
 use crate::geo2d::{Point2, Region};
 use crate::geometry::Point3;
-use crate::stock_sim::{Dexel, StockError};
+use crate::stock_sim::{Backend, Columns, Stock, StockError};
 
 pub use report::{PathQuality, QualitySpec};
 pub use shape::tangents;
@@ -53,35 +53,30 @@ pub(crate) const RIM_SAMPLES: usize = 360;
 /// `top_z` over `region` only (the cells outside it start below `floor`,
 /// because the walls are the part, which a pass grazes but never loads), on
 /// the spec's grid over the bounds grown by `margin`.
-pub fn stock_for(region: &Region, top_z: f64, floor: f64, margin: f64, spec: &QualitySpec) -> Result<Dexel, StockError> {
+pub fn stock_for(region: &Region, top_z: f64, floor: f64, margin: f64, spec: &QualitySpec) -> Result<Stock, StockError> {
     let Some((lo, hi)) = region.bounds() else {
         return Err(StockError::Invalid("empty region has no stock".into()));
     };
-    let mut dex = Dexel::block(lo.x - margin, lo.y - margin, hi.x + margin, hi.y + margin, top_z, spec.cell)?;
+    let mut dex =
+        Stock::block(Backend::Column, lo.x - margin, lo.y - margin, hi.x + margin, hi.y + margin, top_z, spec.cell)?;
     let below = floor - 1.0;
-    for iy in 0..dex.ny {
-        for ix in 0..dex.nx {
-            if !region.contains(dex.center(ix, iy)) {
-                dex.set(ix + iy * dex.nx, below);
-            }
-        }
-    }
+    dex.set_tops(|_, c, top| if region.contains(c) { top } else { below })?;
     Ok(dex)
 }
 
 /// Area (mm^2) of the cells whose centers lie inside `region` with
 /// material still standing above `z`: the rest the path left there.
-#[must_use]
-pub fn rest_area(dex: &Dexel, region: &Region, z: f64) -> f64 {
+pub fn rest_area(dex: &Stock, region: &Region, z: f64) -> Result<f64, StockError> {
+    let cols = dex.columns()?;
     let mut n = 0usize;
-    for iy in 0..dex.ny {
-        for ix in 0..dex.nx {
-            if dex.top_at(ix + iy * dex.nx) > z + Z_EPS && region.contains(dex.center(ix, iy)) {
+    for iy in 0..cols.ny() {
+        for ix in 0..cols.nx() {
+            if cols.top_at(ix, iy) > z + Z_EPS && region.contains(cols.center(ix, iy)) {
                 n += 1;
             }
         }
     }
-    n as f64 * dex.cell * dex.cell
+    Ok(n as f64 * cols.cell() * cols.cell())
 }
 
 /// The radius the contact angle is read on: a cell and a half OUTSIDE
@@ -98,10 +93,13 @@ pub fn rim_for(tool_diameter: f64, cell: f64) -> f64 {
 
 /// Run `path` through `dex` (cutting it as it goes) and measure it.
 /// The stock is the caller's: pass a fresh block, read the rest after.
-pub fn measure(path: &Toolpath, dex: &mut Dexel, spec: &QualitySpec) -> PathQuality {
+/// Refuses only what the stock's own cut refuses (never on the column
+/// arm `stock_for` builds).
+pub fn measure(path: &Toolpath, dex: &mut Stock, spec: &QualitySpec) -> Result<PathQuality, StockError> {
     let r = spec.tool_diameter * 0.5;
-    let rim = rim_for(spec.tool_diameter, dex.cell);
-    let step = (r / 10.0).max(dex.cell);
+    let cell = dex.cell();
+    let rim = rim_for(spec.tool_diameter, cell);
+    let step = (r / 10.0).max(cell);
     let cut_deg = crate::load::deg_at_rim(spec.in_cut_load, spec.tool_diameter, rim);
     let mut q = PathQuality { rim, diameter: spec.tool_diameter, ..PathQuality::default() };
     // The path's named entry bores: every helical descent's circle. A
@@ -171,7 +169,7 @@ pub fn measure(path: &Toolpath, dex: &mut Dexel, spec: &QualitySpec) -> PathQual
                 if k == n && m.arc.is_none() {
                     dir = vertex_heading((b.x - a.x, b.y - a.y), out, spec.break_deg).unwrap_or(dir);
                 }
-                let deg = contact_deg(dex, p, dir, rim, spec.wall_below);
+                let deg = contact_deg(&dex.columns()?, p, dir, rim, spec.wall_below);
                 let piece = len / n as f64;
                 let bore = bores.iter().any(|&(c, rr)| (p.x - c.x).hypot(p.y - c.y) <= rr + 1e-6);
                 if planar && m.kind == MoveKind::Feed && !bore {
@@ -205,7 +203,7 @@ pub fn measure(path: &Toolpath, dex: &mut Dexel, spec: &QualitySpec) -> PathQual
                 first.get_or_insert(joint);
                 last = joint;
                 peak = peak.max(deg);
-                dex.cut_chord(prev, p, r);
+                dex.cut_chord(prev, p, r)?;
                 prev = p;
             }
         }
@@ -220,7 +218,7 @@ pub fn measure(path: &Toolpath, dex: &mut Dexel, spec: &QualitySpec) -> PathQual
         q.descents += 1;
     }
     shape::breaks(&path.moves, &ends, (spec.break_deg, cut_deg), &mut q);
-    q
+    Ok(q)
 }
 
 /// The tool's heading at sample `p` of `m`, the direction its contact
@@ -287,7 +285,7 @@ fn vertex_heading(inc: (f64, f64), out: Option<(f64, f64)>, limit: f64) -> Optio
 /// reads the width it really has, as a straight wall at that width
 /// does) but never makes an arc by itself (a tool touching walls only
 /// cuts nothing).
-fn contact_deg(dex: &Dexel, p: Point3, dir: (f64, f64), rim: f64, wall: Option<f64>) -> f64 {
+fn contact_deg(dex: &Columns<'_>, p: Point3, dir: (f64, f64), rim: f64, wall: Option<f64>) -> f64 {
     let l = dir.0.hypot(dir.1);
     let (base, span) = if l > 1e-12 {
         (dir.1.atan2(dir.0) - std::f64::consts::FRAC_PI_2, std::f64::consts::PI)
@@ -297,7 +295,7 @@ fn contact_deg(dex: &Dexel, p: Point3, dir: (f64, f64), rim: f64, wall: Option<f
     let hits = (0..RIM_SAMPLES).map(|k| {
         let a = base + (k as f64 + 0.5) * span / RIM_SAMPLES as f64;
         let s = Point2::new(p.x + rim * a.cos(), p.y + rim * a.sin());
-        match dex.col(s).map(|i| dex.top_at(i)) {
+        match dex.top_over(s) {
             Some(t) if t > p.z + Z_EPS => Rim::Stock,
             Some(t) if wall.is_some_and(|w| t < w) => Rim::Wall,
             _ => Rim::Open,

@@ -145,8 +145,26 @@ fn a_refused_carry_disables_the_option_with_its_reason() {
         h.get_by(|n| n.role() == Role::RadioButton && n.label().as_deref() == Some("What Setup1 leaves behind"));
     assert!(carried.accesskit_node().is_disabled(), "a turn the lattice cannot carry cannot be picked");
     assert!(h.query_by_label_contains(CARRY_TURN_REFUSAL).is_some(), "the reason is named on the page");
+    // #866: the page says which turn and what to do about it.
+    assert!(h.query_by_label_contains("'Setup2' holds the part turned X 0°, Y 0°, Z 30° from how 'Setup1' holds it").is_some());
+    assert!(h.query_by_label_contains("To go on, choose \"Its own stock\" for this setup").is_some(), "what to do");
     h.get_by_label("Its own stock (the Stock node)").click();
     h.run();
     assert_eq!(setup_stock::stored(&h.state().world, "Setup2"), Some(StockSource::Own), "a new block can still be picked");
     assert!(h.query_by_label_contains("Cannot take what Setup1 leaves behind").is_some());
+}
+
+/// #866: the setup's Settings page speaks the user's words - the
+/// active-setup radio no longer says "furniture" (our in-code word for a
+/// setup's stock, WCS and fixtures).
+#[test]
+fn the_settings_page_has_no_in_code_jargon() {
+    let mut h = Harness::builder().with_size(Vec2::new(900.0, 1200.0)).build_ui_state(
+        |ui, st: &mut State| super::setup_pages::page(ui, st, "Setup2", crate::state::SetupPage::Settings),
+        two_setups(),
+    );
+    h.run();
+    let radio = h.get_by(|n| n.role() == Role::RadioButton && n.label().as_deref() == Some(super::setup_pages::ACTIVE_SETUP_LABEL));
+    assert!(!radio.accesskit_node().is_disabled(), "the active-setup radio is live");
+    assert!(h.query_by_label_contains("furniture").is_none(), "no in-code jargon on the page");
 }

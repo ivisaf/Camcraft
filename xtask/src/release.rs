@@ -75,6 +75,11 @@ impl Cut {
 
     /// Runs a command at the root (or `cwd`); a dry run prints it instead. Non-zero exit fails the cut.
     fn run(&mut self, exe: &str, args: &[String], env: &[(&str, &Path)]) -> Result<(), String> {
+        self.run_clearing(exe, args, env, &[])
+    }
+
+    /// `run`, with `clear` removed from the child's environment.
+    fn run_clearing(&mut self, exe: &str, args: &[String], env: &[(&str, &Path)], clear: &[&str]) -> Result<(), String> {
         let line = format!("{exe} {}", args.join(" "));
         if self.a.dry {
             self.say(format!("[dry-run] {line}"));
@@ -84,6 +89,9 @@ impl Cut {
         let program = if exe == "cargo" { exec::cargo() } else { exe.to_string() };
         let mut c = Command::new(program);
         c.args(args).current_dir(&self.root).stdin(Stdio::null());
+        for k in clear {
+            c.env_remove(k);
+        }
         for (k, v) in env {
             c.env(k, v);
         }
@@ -243,8 +251,11 @@ impl Cut {
             self.say("skipped (--skip-build)");
             return Ok(());
         }
+        // The shipped binary never depends on a compile cache: drop any compiler wrapper the environment sets
+        // (a maintainer may set RUSTC_WRAPPER machine-wide). The release GATE tier may still use sccache.
+        let clear = exec::packaging_env_clear(|v| std::env::var_os(v).is_some());
         for args in pack::build_steps(self.os) {
-            self.run("cargo", &args, &[])?;
+            self.run_clearing("cargo", &args, &[], &clear)?;
         }
         Ok(())
     }

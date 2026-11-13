@@ -3,7 +3,9 @@
 //! state) or Custom (a table of points with optional arcs), a flat side
 //! view of cutter, shank and holder with their key dimensions that
 //! follows every keystroke, the live refusal by name, and Apply profile,
-//! which queues the one command. Turning tools are not spun profiles:
+//! which queues the one command. #93 slice 2: Draw cutter switches the
+//! tab to the tool's own cutter, neck and shank (`tool_cutter_page`),
+//! drawn the same way. Turning tools are not spun profiles:
 //! for them the column stays the Body section alone (owner, #93).
 //! Provenance: our own pane over `app::tool_body_view` and
 //! `app::spun`; the side view is the handbook's tool drawing. No vendor
@@ -22,7 +24,7 @@ use crate::state::{State, ToolColumn, is_spun_kind};
 const VIEW: Vec2 = Vec2::new(260.0, 230.0);
 const NOTE: Color32 = Color32::from_rgb(0x9E, 0xA8, 0xB8);
 const HOLDER: Color32 = Color32::from_rgb(230, 160, 60);
-const BAD: Color32 = Color32::from_rgb(230, 90, 80);
+pub(super) const BAD: Color32 = Color32::from_rgb(230, 90, 80);
 
 /// The editor's third column: Body / Profile tabs for a milling tool,
 /// the Body section alone for a turning tool.
@@ -41,6 +43,22 @@ pub(super) fn third_column(ui: &mut Ui, state: &mut State, exists: bool, u: Unit
             {
                 state.tool_profile_ui.column = ToolColumn::Profile;
             }
+            // #93 slice 2: which outline the Profile tab draws - on the
+            // tab row, so the holder view keeps its height.
+            if state.tool_profile_ui.column == ToolColumn::Profile {
+                ui.separator();
+                let cutter = state.tool_cutter_ui.shown;
+                if ui.selectable_label(!cutter, "Draw holder").on_hover_text("the holder as a revolved outline").clicked() {
+                    state.tool_cutter_ui.shown = false;
+                }
+                if ui
+                    .selectable_label(cutter, "Draw cutter")
+                    .on_hover_text("the tool's own cutter, neck and shank as a revolved outline")
+                    .clicked()
+                {
+                    state.tool_cutter_ui.shown = true;
+                }
+            }
         });
     }
     if milling && state.tool_profile_ui.column == ToolColumn::Profile {
@@ -51,6 +69,10 @@ pub(super) fn third_column(ui: &mut Ui, state: &mut State, exists: bool, u: Unit
 }
 
 fn profile_section(ui: &mut Ui, state: &mut State, exists: bool, u: Unit) {
+    if state.tool_cutter_ui.shown {
+        super::tool_cutter_page::cutter_section(ui, state, exists, u);
+        return;
+    }
     ui.strong("Holder profile");
     if !exists {
         ui.label("Add the tool first, then draw its holder.");
@@ -80,7 +102,9 @@ fn profile_section(ui: &mut Ui, state: &mut State, exists: bool, u: Unit) {
     let tool = state.tool_ui.to_tool();
     let points = state.tool_profile_ui.points.clone();
     let check = if points.is_empty() { Err("no holder - the tool states none".to_owned()) } else { tool_body_view::spun_preview(&tool, &points) };
-    side_view(ui, &tool, &points, check.as_ref().ok(), u);
+    let cutter = camcraft_app::tool_cutter::shown(&tool, state.editor_tool_cutter().as_ref()).map(|c| c.outline()).unwrap_or_default();
+    let holder: Vec<(f64, f64)> = check.as_ref().map_or_else(|_| points.iter().map(|p| (p.z, p.r)).collect(), SpunProfile::outline);
+    side_view(ui, &tool, (&cutter, true), (&holder, check.is_ok()), u);
     match &check {
         Ok(s) => {
             state.retire_profile_refusal();
@@ -113,29 +137,40 @@ fn profile_section(ui: &mut Ui, state: &mut State, exists: bool, u: Unit) {
     {
         state.queue_apply_tool_profile();
     }
+    super::tool_holder_picker::holder_picker(ui, state, u);
 }
 
 /// The points, tip-up: z, r, arc radius (0 = line), insert after,
 /// remove. Read-only in Parametric.
 fn points_table(ui: &mut Ui, state: &mut State, u: Unit) {
     let custom = state.tool_profile_ui.custom;
-    let n = state.tool_profile_ui.points.len();
+    let (insert, remove) = points_grid(ui, u, &mut state.tool_profile_ui.points, custom, "tool_profile_points");
+    if let Some(i) = insert {
+        state.insert_profile_point(i);
+    }
+    if let Some(i) = remove {
+        state.remove_profile_point(i);
+    }
+}
+
+/// The editable points grid both drawn outlines share: returns the row
+/// to insert after and the row to remove, when clicked.
+pub(super) fn points_grid(ui: &mut Ui, u: Unit, points: &mut [SpunPoint], editable: bool, id: &str) -> (Option<usize>, Option<usize>) {
+    let n = points.len();
     let mut insert = None;
     let mut remove = None;
-    egui::ScrollArea::vertical().max_height(150.0).id_salt("tool_profile_points").show(ui, |ui| {
-        ui.add_enabled_ui(custom, |ui| {
-            egui::Grid::new("tool_profile_grid").num_columns(6).spacing([4.0, 2.0]).show(ui, |ui| {
+    egui::ScrollArea::vertical().max_height(150.0).id_salt(id).show(ui, |ui| {
+        ui.add_enabled_ui(editable, |ui| {
+            egui::Grid::new((id, "grid")).num_columns(6).spacing([4.0, 2.0]).show(ui, |ui| {
                 for h in ["#", &format!("z {}", u.suffix()), &format!("r {}", u.suffix()), "arc R", "", ""] {
                     ui.label(h);
                 }
                 ui.end_row();
-                for i in 0..n {
+                for (i, p) in points.iter_mut().enumerate() {
                     ui.label(format!("{}", i + 1));
-                    if let Some(p) = state.tool_profile_ui.points.get_mut(i) {
-                        len_cell(ui, u, &mut p.z);
-                        len_cell(ui, u, &mut p.r);
-                        len_cell(ui, u, &mut p.arc);
-                    }
+                    len_cell(ui, u, &mut p.z);
+                    len_cell(ui, u, &mut p.r);
+                    len_cell(ui, u, &mut p.arc);
                     if i + 1 < n && ui.small_button("+").on_hover_text("insert a point after this one").clicked() {
                         insert = Some(i);
                     } else if i + 1 >= n {
@@ -149,16 +184,11 @@ fn points_table(ui: &mut Ui, state: &mut State, u: Unit) {
             });
         });
     });
-    if let Some(i) = insert {
-        state.insert_profile_point(i);
-    }
-    if let Some(i) = remove {
-        state.remove_profile_point(i);
-    }
+    (insert, remove)
 }
 
 /// A compact unit-lens length cell (the `fields::num` law, narrower).
-fn len_cell(ui: &mut Ui, u: Unit, v: &mut f64) {
+pub(super) fn len_cell(ui: &mut Ui, u: Unit, v: &mut f64) {
     let w = [54.0, ui.spacing().interact_size.y];
     if u == Unit::Millimeters {
         ui.add_sized(w, egui::DragValue::new(v).speed(0.1));
@@ -170,16 +200,16 @@ fn len_cell(ui: &mut Ui, u: Unit, v: &mut f64) {
     }
 }
 
-/// The flat side view: cutter and shank from the tool's numbers, the
-/// holder from the draft (amber when it validates, a red outline when
-/// not), to scale, tip at the bottom, with the key dimensions.
-fn side_view(ui: &mut Ui, tool: &Tool, points: &[SpunPoint], spun: Option<&SpunProfile>, u: Unit) {
+/// The flat side view: the cutter, neck and shank outline and the
+/// holder outline, each with whether it validates (filled when it
+/// does, a red outline when not), to scale, tip at the bottom, with
+/// the key dimensions.
+pub(super) fn side_view(ui: &mut Ui, tool: &Tool, cutter: (&[(f64, f64)], bool), holder: (&[(f64, f64)], bool), u: Unit) {
     const PAD: f32 = 16.0;
     let (resp, painter) = ui.allocate_painter(VIEW, Sense::hover());
     let rect = resp.rect;
     painter.rect_filled(rect, 4.0, Color32::from_rgb(24, 26, 31));
-    let cutter = SpunProfile::cutter_of(tool).map(|c| c.outline()).unwrap_or_default();
-    let holder: Vec<(f64, f64)> = spun.map_or_else(|| points.iter().map(|p| (p.z, p.r)).collect(), SpunProfile::outline);
+    let ((cutter, cutter_ok), (holder, ok)) = (cutter, holder);
     let all = || cutter.iter().chain(holder.iter()).filter(|q| q.0.is_finite() && q.1.is_finite());
     let r_max = all().fold(0.0f64, |a, q| a.max(q.1));
     let z_max = all().fold(0.0f64, |a, q| a.max(q.0));
@@ -202,10 +232,11 @@ fn side_view(ui: &mut Ui, tool: &Tool, points: &[SpunPoint], spun: Option<&SpunP
             }
         }
     };
-    slices(&cutter, &|zm| if zm < zc { Color32::from_rgb(168, 178, 192) } else { Color32::from_rgb(122, 130, 142) });
-    let ok = spun.is_some();
+    if cutter_ok {
+        slices(cutter, &|zm| if zm < zc { Color32::from_rgb(168, 178, 192) } else { Color32::from_rgb(122, 130, 142) });
+    }
     if ok {
-        slices(&holder, &|_| Color32::from_rgba_unmultiplied(230, 160, 60, 90));
+        slices(holder, &|_| Color32::from_rgba_unmultiplied(230, 160, 60, 90));
     }
     let outline = |o: &[(f64, f64)], ink: Color32| {
         let mut pts: Vec<Pos2> = o.iter().map(|&(z, r)| at(z, r)).collect();
@@ -214,8 +245,8 @@ fn side_view(ui: &mut Ui, tool: &Tool, points: &[SpunPoint], spun: Option<&SpunP
             painter.add(Shape::closed_line(pts, Stroke::new(1.0, ink)));
         }
     };
-    outline(&cutter, Color32::from_rgb(214, 220, 228));
-    outline(&holder, if ok { HOLDER } else { BAD });
+    outline(cutter, if cutter_ok { Color32::from_rgb(214, 220, 228) } else { BAD });
+    outline(holder, if ok { HOLDER } else { BAD });
     // Heights: flute top, the holder's foot (stickout) and top (gauge).
     let small = FontId::proportional(10.0);
     let tick = |z: f64, what: &str| {

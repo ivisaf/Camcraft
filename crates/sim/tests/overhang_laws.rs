@@ -47,7 +47,7 @@ fn mv(kind: MoveKind, from: Point3, to: Point3) -> Move {
 }
 
 fn path(moves: Vec<Move>) -> Toolpath {
-    Toolpath { moves, cycles: Vec::new(), notes: Vec::new(), comps: Vec::new(), threads: Vec::new(), probes: Vec::new(), breaks: Vec::new() }
+    Toolpath { moves, cycles: Vec::new(), notes: Vec::new(), comps: Vec::new(), threads: Vec::new(), probes: Vec::new(), breaks: Vec::new(), plasma: None }
 }
 
 /// A post X/Y [-5, 5], Z [0, 10] carrying a ledge X [-5, 15], Y [-5, 5],
@@ -342,6 +342,7 @@ fn judge_ball(p: &Toolpath, facets: &[Triangle]) -> Vec<Warning> {
         shank_len: tool.shank_len,
         holder_radius: tool.holder_radius,
         holder_len: tool.holder_len,
+        body: None,
     };
     let cx = VerifyContext {
         region: &region,

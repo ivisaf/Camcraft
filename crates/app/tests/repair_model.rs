@@ -6,7 +6,11 @@
 //! Gate map (M4.4): covers app::commands::repair_model,
 //! app::commands::update_model, app::model, camcraft_geometry::geometry::repair.
 
-use camcraft_app::commands::{CommandError, History, ImportModel, RepairModel, SetStock};
+use camcraft_app::commands::{
+    AddTool, CommandError, CreateOperation, History, ImportModel, RepairModel, SetStock, UpdateModel,
+};
+use camcraft_app::operation::{Height, OpParams, SrcRef};
+use camcraft_app::tools::catalog;
 use camcraft_app::geometry::repair::open_edge_count;
 use camcraft_app::geometry::{cube, Mesh, Point3, Triangle};
 use camcraft_app::model;
@@ -79,7 +83,52 @@ fn bad_parameters_and_bad_targets_refuse_by_name() {
             .expect("stock"),
     );
     let err = RepairModel::new(&world, STOCK_NAME, 0.001, 256).expect_err("furniture");
-    assert!(err.to_string().contains("setup furniture"), "{err}");
+    assert!(err.to_string().contains("is not a model"), "{err}");
+    assert!(!err.to_string().to_lowercase().contains("furniture"), "{err}");
+}
+
+/// #878 review: a tool or an operation reaches the same "not a model"
+/// branch as stock does, so its refusal must not call it a setup part.
+#[test]
+fn tools_and_operations_are_refused_as_not_models_not_setup_parts() {
+    let world = new_world();
+    let mut history = History::default();
+    history.execute(
+        &world,
+        SetStock::new(&world, StockShape::Box { dx: 10.0, dy: 10.0, dz: 10.0 }, Location::default())
+            .expect("stock"),
+    );
+    let tool = catalog().into_iter().find(|(n, _)| *n == "EM-0400-2FL").map(|(_, t)| t);
+    history.execute(&world, AddTool::new(&world, "EM-0400-2FL", tool.expect("catalog")).expect("tool"));
+    let params = OpParams::Face {
+        holes: Default::default(),
+        tilt: None,
+        blend_turns: false,
+        stepover: 3.0,
+        clearance_z: Height::fixed(15.0),
+        cut_z: Height::fixed(5.0),
+        top_z: None,
+        stepdown: None,
+        feed: 1200.0,
+        plunge_feed: 300.0,
+        climb: true,
+    };
+    history.execute(
+        &world,
+        CreateOperation::new(&world, "Face1", "EM-0400-2FL", SrcRef::Stock, params).expect("op"),
+    );
+    for name in ["EM-0400-2FL", "Face1"] {
+        let repair = RepairModel::new(&world, name, 0.001, 256).expect_err("not a model");
+        let update = UpdateModel::new(&world, name, cube(Point3::ZERO, Point3::new(1.0, 1.0, 1.0)))
+            .err()
+            .expect("not a model");
+        for err in [repair, update] {
+            let text = err.to_string();
+            assert!(text.contains("is not a model"), "{text}");
+            assert!(!text.contains("part of a setup"), "{text}");
+            assert!(!text.to_lowercase().contains("furniture"), "{text}");
+        }
+    }
 }
 
 #[test]

@@ -63,6 +63,7 @@ mod names {
     pub const FIELD_ACTIVE: &str = "field_active";
     pub const SELECTION_BG: &str = "selection_bg";
     pub const SELECTION_STROKE: &str = "selection_stroke";
+    pub const VIEWPORT: &str = "viewport";
     pub const RADIUS_WIDGET: &str = "radius_widget";
     pub const RADIUS_WINDOW: &str = "radius_window";
     pub const RADIUS_MENU: &str = "radius_menu";
@@ -86,7 +87,7 @@ pub const COLOR_NAMES: &[&str] = &[
     names::INK, names::INK_ALT, names::WELL, names::TEXT, names::TEXT_DIM,
     names::TEXT_FAINT, names::BORDER, names::ACCENT, names::ACCENT_HOVER,
     names::FIELD_BG, names::FIELD_HOVER, names::FIELD_ACTIVE,
-    names::SELECTION_BG, names::SELECTION_STROKE,
+    names::SELECTION_BG, names::SELECTION_STROKE, names::VIEWPORT,
 ];
 /// The geometry vocabulary (every override is clamped through the
 /// same windows the built-in const guard checks).
@@ -359,7 +360,7 @@ fn apply_overlay(
     let Tokens {
         ink, ink_alt, well, text, text_dim, text_faint, border, accent,
         accent_hover, field_bg, field_hover, field_active, selection_bg,
-        selection_stroke, radius_widget, radius_window, radius_menu,
+        selection_stroke, viewport, radius_widget, radius_window, radius_menu,
         item_spacing_x, item_spacing_y, button_padding_x, button_padding_y,
         control_height, row_height, cell_h, cell_w, glyph_px, font_label,
         font_caption, font_row, font_row_suffix,
@@ -388,6 +389,7 @@ fn apply_overlay(
         field_active: c(names::FIELD_ACTIVE, field_active),
         selection_bg: c(names::SELECTION_BG, selection_bg),
         selection_stroke: c(names::SELECTION_STROKE, selection_stroke),
+        viewport: c(names::VIEWPORT, viewport),
         radius_widget: rad(names::RADIUS_WIDGET, radius_widget, clamp::RADIUS as f32),
         radius_window: rad(names::RADIUS_WINDOW, radius_window, 24.0),
         radius_menu: rad(names::RADIUS_MENU, radius_menu, 24.0),

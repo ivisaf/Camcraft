@@ -9,7 +9,7 @@
 // text; original work. Where the manual leaves a hole, the post
 // refuses by name or the house style decides, and the conformance
 // goldens lock that decision, not any vendor's.
-description = "Heidenhain TNC (3-axis mill, DIN/ISO mode, numbered * blocks, drilling as G00/G01)";
+description = "Heidenhain TNC (3-axis mill, DIN/ISO G200/G205/G206/G207 cycles and G247 presets)";
 vendor = "CamCraft (independent, unaffiliated)";
 legal = "Original clean-room work; public documentation only";
 certificationLevel = 1;
@@ -21,12 +21,13 @@ setCodePage = "utf-8";
 capabilities = 1; // reference contract: integer feature mask (bit 1 = milling)
 coolantModes = true; // reads PARAM Coolant (#112/#150): the engine refuses non-Flood ops for a post without it
 afterModes = true; // reads PARAM AfterOperation (#110): the engine refuses a stop or home ask for a post without it
+floatingTapping = true; // #51: G206 requires the operation's explicit floating-holder choice
 
 // Determinism law: no timestamps, no randomness - the same stream
 // always posts to the same text (golden files depend on it).
 
 // ---------------------------------------------------------------- state
-var wcsWord = "G54";
+var preset = null, activePreset = null;
 var sRpm = 0;
 var spindleWait = false;
 var toolWait = false;
@@ -36,8 +37,13 @@ var coolantAsk = "flood";  // the section's PARAM Coolant (#112), flood when uns
 var afterAsk = "";         // the section's PARAM AfterOperation (#110), none when unstated
 var coolantOp = "";        // the section's OperationName, for refusals (#150)
 var sectionOpen = false;
+var smoothTol = 0;          // #616: the section's PARAM Smoothing, mm (0: none asked)
+var smoothMode = "";        // #616: "finish" or "rough"
+var smoothActive = false;   // #616: this section wrote its smoothing words
 var modalWait = false;  // G40 G90 rides the section's first motion block
 var pendingDwell = null; // {z, s}: the open hole's dwell, owed at its bottom
+var inCycle = false, cycleSig = "", cycleX = 0, cycleY = 0, cycleR = 0;
+var modalFeed = null;
 var orgX = 0, orgY = 0, orgZ = 0;
 var pgmName = "CAMCRAFT";
 var blockNo = 0;
@@ -217,22 +223,21 @@ function onRadiusCompensation() {
   msg("control cutter compensation (G41/G42) is not supported by this post - choose In computer, or the Fanuc, Haas, Mazak or Siemens 840D post");
 }
 
-// #50: in this mode G54 is DATUM SHIFT with axis values and G55 a
-// touch-probe cycle (pp. 753-756: "G54 X+20 Y+30 Z+10"), not a
-// work-offset register. The first work offset is therefore the
-// control's active preset - no word; any other is refused by name
-// (preset selection is cycle G247, whose parameters this post was
-// not specced from), never posted as a word the TNC reads otherwise.
+// In DIN/ISO G54 is DATUM SHIFT, not an offset register. Explicit
+// app offsets instead select preset rows through G247 (#51).
 function onParameter(name, value) {
+  if (name === "Smoothing") { smoothTol = Number(value) || 0; return; }
+  if (name === "SmoothingMode") { smoothMode = String(value || ""); return; }
   commentParam(name, value);
   if (name === "OperationName") coolantOp = String(value || "");
   if (name === "Coolant") { coolantAsk = String(value || "flood"); return; }
   if (name === "AfterOperation") { afterAsk = String(value || ""); return; }
   if (name === "WorkOffset" && value) {
-    wcsWord = String(value);
-    if (wcsWord !== "G54") {
-      msg("work offset " + wcsWord + " has no TNC DIN/ISO form in this post - use the first work offset (the active preset)");
-    }
+    // House mapping: explicit G54..G59 selects preset-table rows 1..6.
+    // Legacy streams without WorkOffset keep the control's active preset.
+    var word = String(value), match = /^G5([4-9])$/.exec(word);
+    if (!match) { msg("work offset " + word + " has no configured TNC preset row"); return; }
+    preset = Number(match[1]) - 3;
   }
   else if (name === "OriginX" && has(value)) orgX = Number(value);
   else if (name === "OriginY" && has(value)) orgY = Number(value);
@@ -261,24 +266,52 @@ function onToolChange(number, name) {
 // 201). G40 G90 ride the first positioning block. The old preamble
 // words are gone: G54 (datum shift), G80 (WORKING PLANE, p. 756) are
 // not what a TNC reads them as.
+// #616: per-operation smoothing, only when the document turned it on
+// (the stream then carries PARAM Smoothing / SmoothingMode). Heidenhain ISO G62 (the ISO form of the tolerance cycle): T the path deviation.
+// Written after the preamble, undone at the section's end so no
+// tolerance leaks into the next operation.
+function smoothOn() {
+  if (!(smoothTol > 0)) return;
+  block(["G62", "T" + fu(smoothTol)]);
+  smoothActive = true;
+}
+function smoothOff() {
+  if (smoothActive) block(["G62"]);  // tolerance cycle with no T: the default again
+  smoothActive = false;
+  smoothTol = 0;
+  smoothMode = "";
+}
+
 function startPreamble() {
   if (sectionOpen) return;
   sectionOpen = true;
+  // #574: a touch probe (a stated speed of 0) states its spindle
+  // stopped before its first move, whatever the tool change did.
+  var probeStop = spindleWait && !(sRpm > 0);
   opNotes();
   modalWait = true;
+  // Cycle 247 activates on definition; never call it as a hole cycle.
+  // It resets coordinate transformations (892905-25 §10.4, p.275).
+  if (preset !== null && preset !== activePreset) {
+    block(["G247", "Q339=" + preset]);
+    activePreset = preset;
+    cycleSig = "";
+  }
   if (toolWait) {
     toolNote();
-    block(["T" + ni(tNo), "G17", spindleWait ? "S" + ff(sRpm) : ""]);
+    block(["T" + ni(tNo), "G17", spindleWait && sRpm > 0 ? "S" + ff(sRpm) : ""]);
     toolWait = false;
-  } else if (spindleWait) {
+  } else if (spindleWait && sRpm > 0) {
     block(["S" + ff(sRpm)]);
   }
-  if (spindleWait) {
+  if (spindleWait && sRpm > 0) {   // a touch probe (#523) states no spindle
     block(["M3"]);
-    spindleWait = false;
   }
+  if (probeStop) block(["M5"]);
+  spindleWait = false;
   coolant = coolantFor(coolantAsk);
   if (coolant) block([coolant]);
+  smoothOn();
 }
 
 // The op's after-action (#110), written once its spindle has stopped:
@@ -304,6 +337,9 @@ function afterOp() {
 function endPreamble() {
   if (!sectionOpen) return;
   sectionOpen = false;
+  inCycle = false;
+  cycleSig = "";
+  smoothOff();
   owedDwell();
   if (coolant) block(["M9"]);
   coolant = "";
@@ -316,17 +352,23 @@ function onSection() { startPreamble(); }
 function onSectionEnd() { endPreamble(); }
 
 // ------------------------------------------------------------- motions
-// #50: the words are the manual's two-digit G00/G01/G02/G03 (the
-// function overview, p. 752). Drilling posts as its expanded chain
-// (see onCycle), so no motion is ever suppressed here.
+// The manual's two-digit G00/G01/G02/G03 (p.752). Native cycles
+// suppress only their replaced axial cuts; safe linking stays explicit.
 function onRapid() {
   startPreamble();
   if (!tiltOk(properties)) return;
+  if (inCycle && sameHole(properties) && properties.Z <= cycleR + 1e-6) return;
+  inCycle = false; // retain the generator's explicit safe lifts/traverses
   motion("G00", xyz(properties));
 }
 function onLinear() {
   startPreamble();
   if (!tiltOk(properties)) return;
+  if (inCycle) {
+    if (!sameHole(properties) || properties.Z > cycleR + 1e-6) msg("native drilling cycle has an inconsistent expanded cutting chain");
+    return;
+  }
+  if (has(properties.FeedRate)) modalFeed = Number(properties.FeedRate);
   motion("G01", xyz(properties).concat([fw(properties.FeedRate)]));
   dwellAtBottom(properties.Z);
 }
@@ -385,6 +427,7 @@ function verticalArc(p) {
 function onCircular() {
   startPreamble();
   if (!tiltOk(properties)) return;
+  if (inCycle) { msg("native drilling cycle cannot replace an arc cutting chain"); return; }
   var p = properties;
   if (p.CircularPlane === "XZ" || p.CircularPlane === "YZ") {
     verticalArc(p);
@@ -413,28 +456,114 @@ function onCircular() {
 }
 
 // ------------------------------------------------------------ drilling
-// #50: this mode has no G81-G89. Its drilling cycles are G200-G209
-// (p. 752), defined with Q parameters (`G200 DRILLING Q200=..`, p. 71)
-// and called with M99/G79 - and G73 is ROTATION, G80 WORKING PLANE
-// (p. 756), so the old `G73 X.. Q..` peck would have rotated the
-// coordinate system. The Q parameters' meanings live in the separate
-// Cycle Programming manual, which this post was not specced from, so
-// no cycle is written: every hole posts as its expanded chain - the
-// generator's own plunges, peck retracts and exits, the exact motion
-// the simulation verified. A dwell becomes FUNCTION DWELL TIME<s>
-// (seconds, p. 456) right after the move that reaches the hole's
-// bottom. Tapping cannot be plain moves (the feed out of a tap needs
-// the spindle reversed in step with it), so TAP is refused by name.
+// #51 provenance: TNC 640 Cycle Programming, ID 892905-25, 9/2016,
+// §§3.3/3.8/4.2/4.3/10.4 (pp.81-82,95-98,111-116,275).
+// G200/G205/G206/G207 define; M99 calls ONCE, on a positioning
+// block (§2.1 p.60). No M89 modal calls and no G80 (working plane).
+// Native cycles return to R; the expanded chain's higher lifts and
+// XY traverses remain explicit. Only its drilling moves are replaced.
 var DWELL_TOL = 1e-6;
+function sameHole(p) {
+  return Math.abs(p.X - cycleX) < DWELL_TOL && Math.abs(p.Y - cycleY) < DWELL_TOL;
+}
+function qword(n, v) {
+  // Q values may need four decimals (not integer feed rounding, which
+  // would change a tap's feed/pitch relation). Numeric ranges checked below.
+  var s = Number(v).toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+  if (s === "-0" || !s) s = "0";
+  return "Q" + n + "=" + (s.charAt(0) === "-" ? s : "+" + s);
+}
+function cycleBad(why) {
+  msg(coolantWho() + "Heidenhain drilling/tapping: " + why);
+}
 function onCycle() {
   startPreamble();
   owedDwell();
-  var p = properties;
-  if (p.CycleType === "TAP") {
-    msg("tapping has no TNC DIN/ISO form in this post (cycles G206/G207 are not specced) - refused, not posted as plain moves");
+  inCycle = false;
+  var p = properties, type = p.CycleType;
+  // Boring keeps the established explicit-chain contract; its spindle
+  // orientation/disengagement semantics are not part of #51.
+  if (type === "BORE" || type === "BACKBORE") {
+    if (has(p.P) && p.P > 0) pendingDwell = { z: Number(p.Z), s: Number(p.P) };
+    cycleSig = "";
     return;
   }
-  if (has(p.P) && p.P > 0) pendingDwell = { z: Number(p.Z), s: Number(p.P) };
+  cycleX = p.X; cycleY = p.Y; cycleR = p.R;
+  inCycle = true; // even refused taps must never fall through to plain feeds
+  if (!has(p.X) || !has(p.Y) || !has(p.R) || !has(p.Z) || !has(p.EntryZ)) {
+    cycleBad("missing finite hole geometry"); return;
+  }
+  var clearance = p.R - p.EntryZ, depth = p.Z - p.EntryZ;
+  var surface = p.EntryZ - orgZ;
+  var dwell = has(p.P) ? Number(p.P) : 0;
+  var feed = has(p.FeedRate) ? Number(p.FeedRate) : (has(p.ChainFeedRate) ? Number(p.ChainFeedRate) : modalFeed);
+  if (clearance < 0 || clearance > 99999.9999 || depth >= 0 || depth < -99999.9999 || Math.abs(surface) > 99999.9999) {
+    cycleBad("needs a nonnegative R clearance and a negative surface-relative depth within the manual's range"); return;
+  }
+  if (!has(feed) || feed <= 0 || feed > 99999.999 || dwell < 0 || dwell > 3600) {
+    cycleBad("missing/invalid positive cutting feed or bottom dwell"); return;
+  }
+  if (typeof machine !== "undefined" && machine.feedRateMax > 0 && feed > machine.feedRateMax) {
+    cycleBad("cutting feed over machine maximum"); return;
+  }
+  var tap = type === "TAP", floating = p.TappingMode === "floating";
+  if (has(p.ChainBottomZ) && Math.abs(p.ChainBottomZ - p.Z) > DWELL_TOL) {
+    cycleBad("drilling dwell/depth disagrees with the expanded chain bottom"); return;
+  }
+  var g = tap ? (floating ? "G206" : "G207") : (type === "PECK" ? "G205" : "G200");
+  var words = [g, qword(200, clearance), qword(201, depth)];
+  if (tap) {
+    if (!has(sRpm) || sRpm <= 0 || sRpm !== Math.round(sRpm)) { cycleBad("tapping needs a positive integral spindle speed to resolve pitch"); return; }
+    var pitch = feed / sRpm;
+    // Only G207 consumes Q239. G206 derives pitch from its feed and rpm.
+    if (!floating && (pitch < 0.0001 || pitch > 99.9999)) { cycleBad("tapping pitch is outside the documented range"); return; }
+    if (!floating && Math.abs(pitch - Math.round(pitch * 10000) / 10000) > 0.0000005) {
+      cycleBad("tapping feed/spindle ratio cannot be represented at the control's pitch resolution"); return;
+    }
+    if (floating && Math.abs(feed - Math.round(feed * 1000) / 1000) > 0.0000005) {
+      cycleBad("floating tapping feed cannot be represented at the control's feed resolution"); return;
+    }
+    if (floating && dwell > 0.5) { cycleBad("G206 floating tapping dwell must be at most 0.5 seconds to avoid tool wedging"); return; }
+    // The current tool model is right-hand only (positive pitch and M3).
+    // Do not infer a left-hand thread from a negative feed or rpm.
+    if (!floating && typeof machine !== "undefined" && machine.rigidTapping === false) {
+      cycleBad("rigid tapping is unavailable on this machine; select a floating holder explicitly if installed"); return;
+    }
+    if (!floating && dwell !== 0) { cycleBad("G207 rigid tapping has no dwell parameter"); return; }
+    if (floating) words.push(qword(206, feed), qword(211, dwell));
+    else words.push(qword(239, pitch));
+  } else {
+    if (type !== "SPOT" && type !== "DRILL" && type !== "PECK" && type !== "DEEP") {
+      cycleBad("unsupported cycle kind " + type); return;
+    }
+    var pecked = type === "PECK" || type === "DEEP";
+    // The generator counts pecks from R, the control from the surface.
+    // A nonzero gap would change the first infeed: refuse rather than
+    // silently deepen it. Single-plunge drills/taps allow that gap.
+    if (pecked && Math.abs(clearance) > DWELL_TOL) {
+      // Preserve the already-supported explicit chain when its air-gap
+      // first infeed cannot be expressed by a constant native peck.
+      inCycle = false; cycleSig = "";
+      if (dwell > 0) pendingDwell = { z: Number(p.Z), s: dwell };
+      return;
+    }
+    var step = pecked ? Number(p.Q) : -depth;
+    if (!has(step) || step <= 0 || step > 99999.9999) { cycleBad("invalid peck/infeed depth"); return; }
+    words.push(qword(206, feed), qword(202, step));
+    if (g === "G200") words.push(qword(210, 0)); // no top-dwell intent
+  }
+  words.push(qword(203, surface), qword(204, clearance));
+  if (g === "G205") {
+    // Constant chip-break pecks, no decrement or deepened start. A
+    // conservative feed re-approach avoids inventing an unverified rapid.
+    words.push(qword(212, 0), qword(205, p.Q), qword(258, 0), qword(259, 0),
+      qword(257, p.Q), qword(256, Math.min(1, p.Q)), qword(211, dwell),
+      qword(379, 0), qword(253, feed), "Q208=FMAX", qword(395, 0));
+  } else if (g === "G200") words.push(qword(211, dwell), qword(395, 0));
+  var sig = words.join("|");
+  if (sig !== cycleSig) { block(words); cycleSig = sig; }
+  // G40/G90 accompanies explicit hole positioning, never a cycle definition.
+  motion("G00", [wo("X", p.X, orgX), wo("Y", p.Y, orgY), wo("Z", p.R, orgZ), "M99"]);
 }
 function dwellAtBottom(z) {
   if (pendingDwell === null || !has(z) || Math.abs(z - pendingDwell.z) > DWELL_TOL) return;

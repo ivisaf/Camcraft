@@ -119,7 +119,7 @@ pub(super) fn validate_kind(dto: &EntityDto, kind: EntityKind) -> Result<(), Pro
         EntityKind::Tool => {
             if is_furniture_name(&dto.name) {
                 return Err(corrupt(format!(
-                    "'{}' is reserved for setup furniture, not a tool",
+                    "'{}' is reserved for the setup's stock or work offsets, not a tool",
                     dto.name
                 )));
             }
@@ -155,6 +155,11 @@ pub(super) fn validate_kind(dto: &EntityDto, kind: EntityKind) -> Result<(), Pro
                 let body = b.to_body(&dto.name).map_err(corrupt)?;
                 crate::tool_body::fits(&tool.to_tool(), &body)
                     .map_err(|e| corrupt(format!("tool '{}': {e}", dto.name)))?;
+            }
+            // #93: a drawn cutter agrees with the tool's numbers, or
+            // the file refuses by name.
+            if let Some(c) = &tool.cutter {
+                super::tool_body_wire::cutter_from_dto(&tool.to_tool(), c, &dto.name).map_err(corrupt)?;
             }
         }
         EntityKind::Operation => {
@@ -269,7 +274,7 @@ pub(super) fn validate_kind(dto: &EntityDto, kind: EntityKind) -> Result<(), Pro
             };
             if s.stock.is_empty() || wcs_empty {
                 return Err(corrupt(format!(
-                    "'{}' has an empty furniture name",
+                    "'{}' has an empty stock or work-offset name",
                     dto.name
                 )));
             }

@@ -379,11 +379,25 @@ fn every_depth_law_golden_verifies_exactly_as_before() {
     // before the solid law - and unchanged by it, warning for warning.
     for (name, w) in got {
         let want: Vec<Warning> = match name {
-            // Law (a), the XY crossing law the solid law never touches:
-            // the same three move pairs before and after.
-            "contour_disc_hole.cl" | "contour_tangential_lead.cl" => {
-                [[17, 19], [40, 42], [63, 65]].into_iter().map(|moves| Warning::Crossing { moves }).collect()
-            }
+            // Law (a), the XY crossing law the solid law never touches.
+            // The R6 bore's r = 3 cutter-centre ring and the 3 mm leads
+            // share one circle, so the leads cross the ring and the
+            // program stays refused. Since #689 the ring closes on arcs
+            // and the lead-out leaves on its true tangent, so the leads
+            // meet the ring's arcs as well as each other: more pairs,
+            // the same refusal.
+            "contour_disc_hole.cl" => [[17, 20], [18, 21], [40, 43], [41, 44], [63, 66], [64, 67]]
+                .into_iter()
+                .map(|moves| Warning::Crossing { moves })
+                .collect(),
+            "contour_tangential_lead.cl" => [
+                [17, 19], [17, 20], [18, 21], [19, 21],
+                [40, 42], [40, 43], [41, 44], [42, 44],
+                [63, 65], [63, 66], [64, 67], [65, 67],
+            ]
+            .into_iter()
+            .map(|moves| Warning::Crossing { moves })
+            .collect(),
             _ => Vec::new(),
         };
         assert_eq!(w, want, "{name}");

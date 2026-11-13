@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
+use crate::braces::{self, Lex};
 use crate::plan::ps_cmp;
 
 /// A `#[test]` fn: its name, its 1-based line span (doc/attr lines through the closing brace) and
@@ -98,15 +99,11 @@ pub fn test_fns(text: &str) -> Result<Vec<TestFn>, String> {
         }
         let Some(name) = name else { break };
         let (mut depth, mut opened, mut e) = (0i64, false, k);
+        let mut lex = Lex::default();
         while e < n {
-            for ch in lines[e].chars() {
-                if ch == '{' {
-                    depth += 1;
-                    opened = true;
-                } else if ch == '}' {
-                    depth -= 1;
-                }
-            }
+            let (o, c) = braces::count(lines[e], &mut lex);
+            opened |= o > 0;
+            depth += o - c;
             if opened && depth <= 0 {
                 break;
             }

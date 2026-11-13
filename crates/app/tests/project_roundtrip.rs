@@ -2983,78 +2983,36 @@ fn the_post_choice_round_trips_and_a_v22_file_means_the_built_in() {
 }
 
 #[test]
-fn the_theme_choice_round_trips_and_a_v40_file_means_dark() {
-    // M6.1 C's persistence law, spelled like the post's: the chosen
-    // theme rides the save as the top-level `theme` key, opening lands
-    // exactly what was chosen, a v40-shaped file (no key) means the
-    // built-in `dark` - what every earlier document wears - and
-    // opening a file without the key CLEARS a stale choice. Landed
-    // values are not re-validated: resolution is the shell's at draw,
-    // so a stranger name or a gone file opens fine here and refuses
-    // by name in the status line there, never silently re-inked.
-    use camcraft_app::commands::{SetTheme, theme_of};
+fn the_project_file_never_carries_the_theme_and_an_old_theme_key_is_ignored() {
+    // #877: the theme is the user's preference, not the document's. A
+    // save writes no `theme` key whatever theme is worn, and opening an
+    // older file that still carries one - any spelling, even a stranger
+    // name or a gone file - loads cleanly and leaves the user's theme
+    // exactly as it was. Without this, a project could override the
+    // preference again.
+    use camcraft_app::commands::{theme_of, theme_set};
     use camcraft_app::schema::ThemeRef;
 
     let world = new_world();
-    let mut history = History::default();
-    history.execute(
-        &world,
-        SetTheme::new(&world, ThemeRef::Named("light".into())).expect("light is a built-in"),
-    );
-    let p = tmp_path("themert");
+    theme_set(&world, &ThemeRef::Named("light".into()));
+    let p = tmp_path("themenone");
     project::save(&world, &p).expect("save");
     let text = std::fs::read_to_string(&p).expect("written");
     let json: serde_json::Value = serde_json::from_str(&text).expect("parses");
-    assert_eq!(json["theme"], serde_json::json!({"named": "light"}), "{text}");
+    assert!(json.get("theme").is_none(), "no theme key: {text}");
 
-    let world2 = new_world();
-    project::load(&world2, &p).expect("load");
-    assert_eq!(theme_of(&world2), ThemeRef::Named("light".into()));
-
-    // `dark` wears no key: the shape every pre-v41 document has.
-    let dark = new_world();
-    let dp = tmp_path("themedark");
-    project::save(&dark, &dp).expect("save");
-    let dt: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&dp).expect("written")).expect("parses");
-    assert!(dt.get("theme").is_none(), "the default stays mute: {dt}");
-
-    // A bare v40 document migrates to `dark`, verbatim.
-    let world3 = new_world();
-    project::open(&world3, r#"{"version": 40, "entities": []}"#).expect("v40 steps up");
-    assert_eq!(theme_of(&world3), ThemeRef::Dark);
-
-    // The leak guard: opening a no-theme file onto a themed world
-    // lands DARK, not the stale singleton.
-    project::load(&world2, &dp).expect("load onto the themed world");
-    assert_eq!(theme_of(&world2), ThemeRef::Dark, "opening never leaks a stale theme");
-
-    // A stranger lands as written - the loader never re-validates
-    // (SetTheme's constructor and the shell's parse did); the refusal
-    // is the status line's, and rewriting the document silently would
-    // lose what its author chose.
-    project::open(
-        &world2,
+    for old in [
+        r#"{"version": 41, "theme": {"named": "dark"}, "entities": []}"#,
         r#"{"version": 41, "theme": {"named": "solarpunk"}, "entities": []}"#,
-    )
-    .expect("a stranger name reads");
-    assert_eq!(theme_of(&world2), ThemeRef::Named("solarpunk".into()));
-
-    // A File theme rides its path the same way.
-    let file = std::env::temp_dir().join(format!("camcraft_rtt_{}.json", std::process::id()));
-    std::fs::write(&file, "{}").expect("temp theme file");
-    let fp = file.display().to_string();
-    history.execute(&world, SetTheme::new(&world, ThemeRef::File(fp.clone())).expect("file theme"));
-    let fpath = tmp_path("themefile");
-    project::save(&world, &fpath).expect("save");
-    let world4 = new_world();
-    project::load(&world4, &fpath).expect("load");
-    assert_eq!(theme_of(&world4), ThemeRef::File(fp));
-
+        r#"{"version": 41, "theme": {"file": "C:/gone/theme.json"}, "entities": []}"#,
+        r#"{"version": 40, "entities": []}"#,
+    ] {
+        project::open(&world, old).expect("an older file opens");
+        assert_eq!(theme_of(&world), ThemeRef::Named("light".into()), "opening kept the user's theme: {old}");
+    }
+    project::load(&world, &p).expect("load our own save");
+    assert_eq!(theme_of(&world), ThemeRef::Named("light".into()));
     let _ = std::fs::remove_file(&p);
-    let _ = std::fs::remove_file(&dp);
-    let _ = std::fs::remove_file(&fpath);
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]

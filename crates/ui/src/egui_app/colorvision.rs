@@ -26,7 +26,7 @@ use camcraft_app::commands::color_vision_of;
 use camcraft_app::schema::ColorVision;
 use egui::{Color32, Ui};
 
-use super::{contrast, cvd, theme::Tokens};
+use super::{contrast, cvd, ground_ink::light_ground, theme, theme::Tokens};
 
 /// The separation floor every must-distinguish pair keeps under its
 /// mode, in CIEDE2000 units. 20 is well past "obviously different"
@@ -92,7 +92,7 @@ impl TextInks {
 /// The unselected edge inks the selection must stand off from: the
 /// shaded-mode edge and the wireframe line (viewport `fs_edge`).
 const EDGE_DARK: [f32; 3] = [0.06, 0.07, 0.09];
-const EDGE_WIRE: [f32; 3] = [0.62, 0.66, 0.72];
+pub(super) const EDGE_WIRE: [f32; 3] = [0.62, 0.66, 0.72];
 
 impl Semantic {
     /// The house palette, exactly what the shell drew before M13.4
@@ -205,7 +205,7 @@ impl Semantic {
     /// panel, the dark set otherwise (WCAG luminance past mid-grey).
     #[must_use]
     pub fn text_on(&self, ground: Color32) -> TextInks {
-        if contrast::luma(ground) > LIGHT_GROUND { self.text_light } else { self.text_dark }
+        if light_ground(ground) { self.text_light } else { self.text_dark }
     }
 
     /// The text pairs that must stay apart on this theme's panel:
@@ -222,9 +222,6 @@ impl Semantic {
     }
 }
 
-/// The luminance past which a panel counts as light for [`Semantic::text_on`]
-/// (dark's ink is 0.02, light's 0.85; mid-grey sits at 0.18).
-const LIGHT_GROUND: f64 = 0.18;
 
 /// The palette a mode wears.
 #[must_use]
@@ -236,10 +233,24 @@ pub const fn palette(mode: ColorVision) -> &'static Semantic {
     }
 }
 
-/// The palette the world's view preference selects.
+/// The palette for a mode on a ground: on a light viewport every mode
+/// wears its light-ground set (#698), whose line inks clear 3:1 there
+/// and whose pairs pass the same CIEDE2000 gate as the dark sets.
+#[must_use]
+pub const fn palette_for(mode: ColorVision, light: bool) -> &'static Semantic {
+    match (mode, light) {
+        (ColorVision::Off, true) => &Semantic::OFF_LIGHT_GROUND,
+        (ColorVision::Protan | ColorVision::Deutan, true) => &Semantic::RED_GREEN_LIGHT_GROUND,
+        (ColorVision::Tritan, true) => &Semantic::TRITAN_LIGHT_GROUND,
+        (_, false) => palette(mode),
+    }
+}
+
+/// The palette the world's view preference selects, on the live
+/// theme's viewport ground.
 #[must_use]
 pub fn palette_of(world: &flecs_ecs::prelude::World) -> &'static Semantic {
-    palette(color_vision_of(world))
+    palette_for(color_vision_of(world), light_ground(theme::current().viewport))
 }
 
 /// A palette colour as egui ink (the located-verdict rings). Half-up

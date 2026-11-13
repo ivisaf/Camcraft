@@ -44,6 +44,8 @@ pub struct Tokens {
     /// Text selection and combo-open highlight.
     pub selection_bg: Color32,
     pub selection_stroke: Color32,
+    /// The viewport's 3D ground (the render pass clear colour).
+    pub viewport: Color32,
     // -- geometry: the Phase-6 complaint made themeable - ribbon size,
     // input fields and button size are tokens, not literals.
     /// Corner radius of widget rects and painted cells/rows.
@@ -106,7 +108,7 @@ pub mod clamp {
 
 /// The ribbon strip's height: the cell box plus the caption row and the
 /// pad, so a theme that grows the cells grows the ribbon with them
-/// (61 = 35 + 26 is today's arithmetic, kept exact at the defaults).
+/// (64 = 38 + 26 is today's arithmetic, kept exact at the defaults).
 #[must_use]
 pub const fn ribbon_h(t: &Tokens) -> f32 {
     t.cell_h + 26.0
@@ -130,6 +132,7 @@ impl Tokens {
         field_active: Color32::from_rgb(0x1A, 0x2B, 0x3A),
         selection_bg: Color32::from_rgb(0x26, 0x4A, 0x6E),
         selection_stroke: Color32::from_rgb(0x4A, 0x86, 0xC2),
+        viewport: Color32::from_rgb(0x17, 0x1A, 0x1F),
         radius_widget: 2,
         radius_window: 6,
         radius_menu: 6,
@@ -139,13 +142,13 @@ impl Tokens {
         button_padding_y: 1.0,
         control_height: 18.0,
         row_height: 20.0,
-        cell_h: 35.0,
-        cell_w: 56.0,
-        glyph_px: 20.0,
-        font_label: 11.5,
-        font_caption: 10.0,
-        font_row: 12.5,
-        font_row_suffix: 10.5,
+        cell_h: 40.0,
+        cell_w: 72.0,
+        glyph_px: 24.0,
+        font_label: 13.0,
+        font_caption: 12.5,
+        font_row: 13.5,
+        font_row_suffix: 11.5,
     };
 
     /// The same shell, inverted: paper grounds, dark ink, the steel
@@ -167,10 +170,11 @@ impl Tokens {
         accent: Color32::from_rgb(0x2F, 0x66, 0x9E),
         accent_hover: Color32::from_rgb(0x47, 0x7D, 0xB8),
         field_bg: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-        field_hover: Color32::from_rgb(0xF0, 0xF3, 0xF7),
+        field_hover: Color32::from_rgb(0xDD, 0xE1, 0xE7),
         field_active: Color32::from_rgb(0xE2, 0xEB, 0xF5),
         selection_bg: Color32::from_rgb(0xC6, 0xDC, 0xF0),
         selection_stroke: Color32::from_rgb(0x47, 0x7D, 0xB8),
+        viewport: Color32::from_rgb(0xDD, 0xE1, 0xE7),
         radius_widget: 2,
         radius_window: 6,
         radius_menu: 6,
@@ -180,13 +184,13 @@ impl Tokens {
         button_padding_y: 1.0,
         control_height: 18.0,
         row_height: 20.0,
-        cell_h: 35.0,
-        cell_w: 56.0,
-        glyph_px: 20.0,
-        font_label: 11.5,
-        font_caption: 10.0,
-        font_row: 12.5,
-        font_row_suffix: 10.5,
+        cell_h: 40.0,
+        cell_w: 72.0,
+        glyph_px: 24.0,
+        font_label: 13.0,
+        font_caption: 12.5,
+        font_row: 13.5,
+        font_row_suffix: 11.5,
     };
 
     /// The panel ground behind the ribbon/browser strips (painted.rs).
@@ -207,7 +211,7 @@ impl Tokens {
         let Tokens {
             ink, ink_alt, well, text, text_dim, text_faint, border, accent,
             accent_hover, field_bg, field_hover, field_active, selection_bg,
-            selection_stroke,
+            selection_stroke, viewport: _,
             radius_widget, radius_window, radius_menu,
             item_spacing_x: _, item_spacing_y: _,
             button_padding_x: _, button_padding_y: _,
@@ -243,14 +247,14 @@ impl Tokens {
         v.widgets.inactive.fg_stroke = Stroke::new(1.0, text);
         v.widgets.inactive.corner_radius = r;
         v.widgets.hovered.bg_fill = field_hover;
-        v.widgets.hovered.weak_bg_fill = accent;
+        // #698: light hovers field_hover, not the accent (egui's bare title
+        // glyphs took white-on-accent ink), and its title bars wear ink_alt.
+        let light = super::ground_ink::light_ground(ink);
+        let hover = if light { field_hover } else { accent };
+        v.widgets.hovered.weak_bg_fill = hover;
         v.widgets.hovered.bg_stroke = Stroke::new(1.0, accent_hover);
-        // The hovered widget's glyphs ride the ACCENT fill - M6.1 D's
-        // derivation replaces the hand-typed white. On dark's steel
-        // blue the arithmetic lands on WHITE (the snapshot's memory),
-        // and on a pale user accent it flips to black rather than
-        // rendering text nobody can read.
-        v.widgets.hovered.fg_stroke = Stroke::new(1.0, contrast::on_fill(accent));
+        // Glyphs ride the hover fill (M6.1 D): WHITE on steel blue, black on pale.
+        v.widgets.hovered.fg_stroke = Stroke::new(1.0, contrast::on_fill(hover));
         v.widgets.hovered.corner_radius = r;
         v.widgets.active.bg_fill = field_active;
         v.widgets.active.weak_bg_fill = accent_hover;
@@ -264,6 +268,9 @@ impl Tokens {
         v.widgets.active.fg_stroke = Stroke::new(1.0, contrast::on_fill(accent_hover));
         v.widgets.active.corner_radius = r;
         v.widgets.open.bg_fill = field_bg;
+        if light {
+            (v.widgets.open.weak_bg_fill, v.widgets.open.fg_stroke) = (ink_alt, Stroke::new(1.0, text));
+        }
         v.widgets.open.bg_stroke = stroke_1px;
         v.widgets.open.corner_radius = r;
         for exp in [
@@ -308,7 +315,7 @@ const fn geom_legal(t: &Tokens) -> bool {
     let Tokens {
         ink: _, ink_alt: _, well: _, text: _, text_dim: _, text_faint: _,
         border: _, accent: _, accent_hover: _, field_bg: _, field_hover: _,
-        field_active: _, selection_bg: _, selection_stroke: _,
+        field_active: _, selection_bg: _, selection_stroke: _, viewport: _,
         radius_widget, radius_window, radius_menu,
         item_spacing_x, item_spacing_y, button_padding_x, button_padding_y,
         control_height, row_height, cell_h, cell_w, glyph_px,

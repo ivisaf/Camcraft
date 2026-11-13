@@ -14,7 +14,7 @@ use crate::stock_sim::field::{center_of, signed, SdfField};
 const MAX_STEPS: u32 = 64;
 
 /// The hit threshold, in cells: below a 64th of a cell the probe is
-/// at the surface's own resolution (`march`'s `STEP_MIN` scale). The
+/// at the surface's own resolution (a 64th of a cell). The
 /// blend converges geometrically toward it; the residual is the
 /// lattice's own slack, not the march's.
 pub(super) const STEP_EPS: f64 = 1.0 / 64.0;

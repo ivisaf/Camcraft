@@ -12,11 +12,19 @@
 //! point is in the frame the generator ran in; the caller that knows
 //! the frame (the app's `run_job`) maps it to world before the UI sees
 //! it ([`GenError::map_location`]).
+//!
+//! #261 part 3: a refusal raised with a path in hand - the ladders'
+//! centre-cutting refusal, the plunge law's audit of a finished path -
+//! may also carry that path as a [`Ghost`], display-only, read the same
+//! way ([`GenError::ghost`]). It reads exactly like the refusal without
+//! it, and it never becomes a toolpath.
 
 use thiserror::Error;
 
 use crate::geo2d::GeoError;
 use crate::geometry::Point3;
+
+use super::ghost::Ghost;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum GenError {
@@ -26,6 +34,12 @@ pub enum GenError {
     /// that spot in the generator's frame. Displays as `Invalid` does.
     #[error("invalid machining parameters: {msg}")]
     At { msg: String, at: Point3 },
+    /// An [`Invalid`](GenError::Invalid) refusal raised with a path in
+    /// hand (#261 part 3): `ghost` is the moves built so far, `at` the
+    /// spot it names if any, both in the generator's frame. Displays as
+    /// `Invalid` does.
+    #[error("invalid machining parameters: {msg}")]
+    Ghosted { msg: String, at: Option<Point3>, ghost: Ghost },
     #[error("nothing to machine: {0}")]
     Empty(String),
     #[error(transparent)]
@@ -51,7 +65,83 @@ impl GenError {
     pub fn location(&self) -> Option<Point3> {
         match self {
             GenError::At { at, .. } => Some(*at),
+            GenError::Ghosted { at, .. } => *at,
             _ => None,
+        }
+    }
+
+    /// The moves a refused generation had built, if it handed them back
+    /// (#261 part 3) - display-only, never a toolpath.
+    #[must_use]
+    pub fn ghost(&self) -> Option<&Ghost> {
+        match self {
+            GenError::Ghosted { ghost, .. } => Some(ghost),
+            _ => None,
+        }
+    }
+
+    /// This invalid-parameters refusal with `path` - the moves built when
+    /// it was raised - handed back as its ghost. A path with nothing
+    /// finite to show, and any other kind of refusal, pass untouched.
+    #[must_use]
+    pub fn with_ghost(self, path: &crate::cl::Toolpath) -> Self {
+        let (msg, at) = match self {
+            GenError::Invalid(msg) => (msg, None),
+            GenError::At { msg, at } => (msg, Some(at)),
+            other => return other,
+        };
+        match Ghost::of(path) {
+            Some(ghost) => GenError::Ghosted { msg, at, ghost },
+            None => match at {
+                Some(at) => GenError::At { msg, at },
+                None => GenError::Invalid(msg),
+            },
+        }
+    }
+
+    /// The same refusal with its ghost carried through `f` (the frame's
+    /// local-to-world map of a path). A ghost `f` leaves nothing finite
+    /// of is dropped, never drawn in the wrong frame.
+    #[must_use]
+    pub fn map_ghost(self, f: impl FnOnce(&crate::cl::Toolpath) -> crate::cl::Toolpath) -> Self {
+        match self {
+            GenError::Ghosted { msg, at, ghost } => match ghost.map_path(f) {
+                Some(ghost) => GenError::Ghosted { msg, at, ghost },
+                None => GenError::Invalid(msg).located(at),
+            },
+            other => other,
+        }
+    }
+
+    /// The same refusal without its ghost: for a caller that ran the
+    /// generator in a space it maps no path out of (a rotary wrap's
+    /// development), where the moves would draw in the wrong place.
+    #[must_use]
+    pub fn without_ghost(self) -> Self {
+        match self {
+            GenError::Ghosted { msg, at, .. } => GenError::Invalid(msg).located(at),
+            other => other,
+        }
+    }
+
+    /// The same refusal with its sentence rewritten by `f` (an
+    /// invalid-parameters one, located or ghosted alike); spot and ghost
+    /// ride along. Other kinds pass untouched.
+    #[must_use]
+    pub fn map_msg(self, f: impl FnOnce(String) -> String) -> Self {
+        match self {
+            GenError::Invalid(m) => GenError::Invalid(f(m)),
+            GenError::At { msg, at } => GenError::invalid_at(f(msg), at),
+            GenError::Ghosted { msg, at, ghost } => GenError::Ghosted { msg: f(msg), at, ghost },
+            other => other,
+        }
+    }
+
+    /// An `Invalid` refusal given the spot `at`, if any.
+    fn located(self, at: Option<Point3>) -> Self {
+        match (self, at) {
+            (GenError::Invalid(msg), Some(at)) => GenError::invalid_at(msg, at),
+            (e, _) => e,
         }
     }
 
@@ -62,6 +152,10 @@ impl GenError {
     pub fn map_location(self, f: impl FnOnce(Point3) -> Point3) -> Self {
         match self {
             GenError::At { msg, at } => GenError::invalid_at(msg, f(at)),
+            GenError::Ghosted { msg, at, ghost } => {
+                let at = at.map(f).filter(|p| p.x.is_finite() && p.y.is_finite() && p.z.is_finite());
+                GenError::Ghosted { msg, at, ghost }
+            }
             other => other,
         }
     }
@@ -94,5 +188,46 @@ mod tests {
         assert_eq!(e.location(), Some(Point3::new(11.0, 2.0, 3.0)));
         let empty = GenError::Empty("nothing".into()).map_location(|_| Point3::new(9.0, 9.0, 9.0));
         assert_eq!(empty, GenError::Empty("nothing".into()));
+    }
+
+    fn built() -> crate::cl::Toolpath {
+        use crate::cl::{Move, MoveKind};
+        let m = Move::new(MoveKind::Feed, Point3::new(0.0, 0.0, -1.0), Point3::new(5.0, 0.0, -1.0), Some(500.0));
+        crate::cl::Toolpath { moves: vec![m], ..Default::default() }
+    }
+
+    #[test]
+    fn a_ghosted_refusal_reads_exactly_like_the_refusal_without_it() {
+        let plain = GenError::Invalid("entry refused: x".into());
+        let g = GenError::Invalid("entry refused: x".into()).with_ghost(&built());
+        assert_eq!(g.to_string(), plain.to_string());
+        assert_eq!(g.ghost().map(Ghost::len), Some(1));
+        assert_eq!(g.location(), None);
+        assert!(format!("{g:?}").contains("Ghost(1 moves)"), "Debug names the size, never the path: {g:?}");
+        // A located refusal keeps its spot beside the ghost.
+        let at = GenError::invalid_at("y", Point3::new(1.0, 2.0, 3.0)).with_ghost(&built());
+        assert_eq!(at.location(), Some(Point3::new(1.0, 2.0, 3.0)));
+        assert!(at.ghost().is_some());
+        // Nothing to show: the refusal stays as it was.
+        assert_eq!(GenError::Invalid("z".into()).with_ghost(&crate::cl::Toolpath::default()), GenError::Invalid("z".into()));
+        assert_eq!(GenError::Empty("e".into()).with_ghost(&built()), GenError::Empty("e".into()));
+    }
+
+    #[test]
+    fn the_ghost_rides_the_frame_and_the_sentence_rewrites_keep_it() {
+        let g = GenError::invalid_at("w", Point3::new(1.0, 0.0, 0.0)).with_ghost(&built());
+        let g = g.map_location(|p| Point3::new(p.x + 10.0, p.y, p.z)).map_ghost(|t| {
+            let mut t = t.clone();
+            t.moves[0].to.x += 10.0;
+            t
+        });
+        assert_eq!(g.location(), Some(Point3::new(11.0, 0.0, 0.0)));
+        assert_eq!(g.ghost().map(|h| h.moves()[0].to.x), Some(15.0));
+        let g = g.map_msg(|m| format!("{m} (why)"));
+        assert_eq!(g.to_string(), "invalid machining parameters: w (why)");
+        assert!(g.ghost().is_some(), "a rewrite keeps the ghost");
+        // A frame that leaves nothing finite drops the ghost, keeps the spot.
+        let dropped = g.map_ghost(|_| crate::cl::Toolpath::default());
+        assert_eq!(dropped, GenError::invalid_at("w (why)", Point3::new(11.0, 0.0, 0.0)));
     }
 }

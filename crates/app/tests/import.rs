@@ -213,13 +213,31 @@ fn a_step_file_in_metres_imports_at_its_size_in_millimetres() {
 fn a_step_file_in_millimetres_keeps_its_numbers() {
     let m = import::load_model(&testdata("Milling-test.step")).expect("must import");
     let b = m.bounds().expect("bounds");
+    // The part's true +X is 30 mm, reached by a curved face: the mesh's
+    // extreme vertex stands within the chord cap (0.005 mm, #689) of it.
     assert!(
-        (b.max.x - 29.994_477).abs() < 1e-3 && (b.max.z - 20.0).abs() < 1e-9,
+        (b.max.x - 30.0).abs() < 0.005 && (b.max.z - 20.0).abs() < 1e-9,
         "max corner ({}, {}, {})",
         b.max.x,
         b.max.y,
         b.max.z
     );
+}
+
+/// #887: the empty parameter list `()` is legal in ISO 10303-21, but ruststep
+/// 0.4.0 (the newest crates.io release) cannot parse it, so one dead
+/// `DRAUGHTING_MODEL('', (), #2);` entity - what HOOPS Exchange exports -
+/// rejected the whole file with a syntax error pointing at `DATA;`. The
+/// fixture is box.step plus that one entity; the `[patch.crates-io]` pin in
+/// the root Cargo.toml (upstream fix ricosjp/ruststep@90fdc935) is what makes
+/// this pass - without it, `load_model` fails.
+#[test]
+fn step_file_with_empty_parameter_list_imports() {
+    let m = import::load_model(&testdata("empty_list.step")).expect("must import");
+    // Same box as box.step - the dead entity must not change the mesh.
+    assert_eq!(m.len(), 12);
+    let b = m.bounds().expect("bounds");
+    assert!(b.min.x == 0.0 && b.max.z == 1.0, "{b:?}");
 }
 
 #[test]

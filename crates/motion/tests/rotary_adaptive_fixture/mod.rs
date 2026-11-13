@@ -139,7 +139,7 @@ pub fn read_levels(path: &Toolpath, top: f64, floor: f64) -> Vec<LevelRead> {
     spec.cell = D / 60.0;
     spec.break_deg = 5.0;
     let Ok(mut dex) = stock_for(&box_of(path), top, floor, 1.0, &spec) else { panic!("stock") };
-    let q = measure(path, &mut dex, &spec);
+    let q = measure(path, &mut dex, &spec).unwrap();
     // The reader's own bore law (`quality::measure`'s `bores`, as the
     // planar suite pocket3d_hsm reads it): a planar cut inside a helical
     // descent's circle is the bore's cleanup - entry engagement, not the

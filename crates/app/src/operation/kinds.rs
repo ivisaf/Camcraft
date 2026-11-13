@@ -87,6 +87,7 @@ fn feed_of(p: &OpParams) -> f64 {
         | OpParams::Circular { feed, .. }
         | OpParams::Pocket3D { feed, .. }
         | OpParams::Slot { feed, .. }
+        | OpParams::TrochoidalSlot { feed, .. }
         | OpParams::Trace { feed, .. }
         | OpParams::Drill { feed, .. }
         | OpParams::Finish3D { feed, .. }
@@ -139,6 +140,8 @@ fn feed_of(p: &OpParams) -> f64 {
         | OpParams::FormTurning { feed, .. } => *feed,
         // The seek feed is the probe's travel pace (#108).
         OpParams::Probe { fast_feed, .. } => *fast_feed,
+        // A blank plasma feed is the controller's (#670): no number.
+        OpParams::PlasmaProfile(p) => p.feed.unwrap_or(0.0),
     }
 }
 
@@ -158,6 +161,7 @@ fn plunge_of(p: &OpParams) -> f64 {
         | OpParams::Circular { plunge_feed, .. }
         | OpParams::Pocket3D { plunge_feed, .. }
         | OpParams::Slot { plunge_feed, .. }
+        | OpParams::TrochoidalSlot { plunge_feed, .. }
         | OpParams::Trace { plunge_feed, .. }
         | OpParams::Drill { plunge_feed, .. }
         | OpParams::Finish3D { plunge_feed, .. }
@@ -207,6 +211,9 @@ fn plunge_of(p: &OpParams) -> f64 {
         | OpParams::FormTurning { plunge_feed, .. } => *plunge_feed,
         // The measuring re-probe is the slow number (#108).
         OpParams::Probe { slow_feed, .. } => *slow_feed,
+        // The torch never plunges into solid: it pierces at the
+        // controller's height and delay (#670).
+        OpParams::PlasmaProfile(p) => p.feed.unwrap_or(0.0),
     }
 }
 
@@ -226,6 +233,7 @@ fn climb_of(p: &OpParams) -> bool {
         | OpParams::Circular { climb, .. }
         | OpParams::Pocket3D { climb, .. }
         | OpParams::Slot { climb, .. }
+        | OpParams::TrochoidalSlot { climb, .. }
         | OpParams::Trace { climb, .. }
         | OpParams::Finish3D { climb, .. }
         | OpParams::Contour5D { climb, .. }
@@ -279,7 +287,7 @@ fn climb_of(p: &OpParams) -> bool {
         // The wall ride and the helix choose their flank: the climb
         // number says which way the circle runs (M2.4 C).
         OpParams::Bore { climb, .. } | OpParams::Thread { climb, .. } => *climb,
-        OpParams::Probe { .. } => false,
+        OpParams::Probe { .. } | OpParams::PlasmaProfile(_) => false,
     }
 }
 
@@ -299,6 +307,8 @@ fn stepover_of(p: &OpParams) -> Option<f64> {
         // The stamped ladder's spacing is the pocket's plain number.
         | OpParams::MultiAxisRough { stepover, .. }
         | OpParams::Slot { stepover, .. } => Some(*stepover),
+        // The trochoid's forward step is no stepover: a retype seeds.
+        OpParams::TrochoidalSlot { .. } => None,
         // Parallel5D's spacing - and the swarf kinds', which run the
         // same derivation - is an Option the same way Finish3D's
         // raster's is: a derivation by default, so the fold reads the
@@ -360,7 +370,7 @@ fn stepover_of(p: &OpParams) -> Option<f64> {
         // One ride per exposed edge is the deburr answer: the model's
         // own edges are the pattern, nothing tiles (M2.5 E B).
         | OpParams::Deburr { .. } => None,
-        OpParams::Probe { .. } => None,
+        OpParams::Probe { .. } | OpParams::PlasmaProfile(_) => None,
     }
 }
 
@@ -397,6 +407,7 @@ fn stepdown_of(p: &OpParams) -> Option<f64> {
         // ceiling (M5.2 E).
         | OpParams::MultiPassTurning { stepdown, .. }
         | OpParams::Slot { stepdown, .. }
+        | OpParams::TrochoidalSlot { stepdown, .. }
         // The boring ladder's axial bite is the pocket's rung law
         // spoken on one circle (M2.4 C).
         | OpParams::Bore { stepdown, .. }
@@ -436,7 +447,7 @@ fn stepdown_of(p: &OpParams) -> Option<f64> {
         // between the clearance plane and the edge there is no
         // infeed ladder to step (M2.5 E B).
         OpParams::Deburr { .. } => None,
-        OpParams::Probe { .. } => None,
+        OpParams::Probe { .. } | OpParams::PlasmaProfile(_) => None,
     }
 }
 
@@ -457,6 +468,7 @@ pub fn top_of(p: &OpParams) -> Option<Height> {
         | OpParams::Circular { top_z, .. }
         | OpParams::Pocket3D { top_z, .. }
         | OpParams::Slot { top_z, .. }
+        | OpParams::TrochoidalSlot { top_z, .. }
         | OpParams::Trace { top_z, .. }
         | OpParams::Drill { top_z, .. }
         | OpParams::Finish3D { top_z, .. }
@@ -501,6 +513,8 @@ pub fn top_of(p: &OpParams) -> Option<Height> {
         | OpParams::Deburr { top_z, .. } => Some(*top_z),
         OpParams::Face { .. } => None,
         OpParams::Probe { .. } => None,
+        // The plasma cut rides the plate's top (#670).
+        OpParams::PlasmaProfile(p) => Some(p.top_z),
     }
 }
 
@@ -520,6 +534,7 @@ pub fn bottom_of(p: &OpParams) -> Option<Height> {
         | OpParams::Circular { bottom_z, .. }
         | OpParams::Pocket3D { bottom_z, .. }
         | OpParams::Slot { bottom_z, .. }
+        | OpParams::TrochoidalSlot { bottom_z, .. }
         | OpParams::Trace { bottom_z, .. }
         | OpParams::Finish3D { bottom_z, .. }
         | OpParams::Contour5D { bottom_z, .. }
@@ -574,6 +589,8 @@ pub fn bottom_of(p: &OpParams) -> Option<Height> {
         OpParams::Chamfer2D { .. } => None,
         OpParams::Face { .. } => None,
         OpParams::Probe { .. } => None,
+        // The plate's bottom: the thickness the small-hole rule reads.
+        OpParams::PlasmaProfile(p) => Some(p.bottom_z),
     }
 }
 
@@ -592,6 +609,7 @@ fn retract_of(p: &OpParams) -> Option<Height> {
         | OpParams::Circular { retract_z, .. }
         | OpParams::Pocket3D { retract_z, .. }
         | OpParams::Slot { retract_z, .. }
+        | OpParams::TrochoidalSlot { retract_z, .. }
         | OpParams::Trace { retract_z, .. }
         | OpParams::Drill { retract_z, .. }
         // Both new rides hop between holes at the authored plane,
@@ -649,7 +667,7 @@ fn retract_of(p: &OpParams) -> Option<Height> {
         // The deburr ride hops every run to the clearance plane -
         // the kernel's own word, no between-run plane authored (M2.5 E B).
         | OpParams::Deburr { .. } => None,
-        OpParams::Probe { .. } => None,
+        OpParams::Probe { .. } | OpParams::PlasmaProfile(_) => None,
     }
 }
 
@@ -864,6 +882,32 @@ fn seed_slot(c: &Carried) -> OpParams {
         entry: Entry3D::Plunge,
         helix_radius: 1.0,
         tilt: c.tilt,
+    }
+}
+
+/// The trochoidal slot's draft (#220): the Slot's authored line at a
+/// width that leaves a 10 mm cutter room to loop, a 10%-of-D step and
+/// a 90 degree limit; the planner cuts the step if the stock needs it.
+fn seed_trochoidal_slot(c: &Carried) -> OpParams {
+    OpParams::TrochoidalSlot {
+        a: Point2::new(-20.0, 0.0),
+        b: Point2::new(20.0, 0.0),
+        width: 16.0,
+        loop_width: None,
+        step: 1.0,
+        max_engagement: crate::machining2d::DEFAULT_MAX_ENGAGEMENT,
+        ret: crate::machining2d::TrochoidReturn::Microlift { height: crate::machining2d::DEFAULT_MICROLIFT },
+        smoothing: 1.0,
+        stock_to_leave: 0.0,
+        clearance_z: c.clearance,
+        retract_z: None,
+        top_z: c.top,
+        bottom_z: c.bottom,
+        stepdown: c.stepdown,
+        feed: c.feed,
+        return_feed: c.feed * 2.0,
+        plunge_feed: c.plunge,
+        climb: c.climb,
     }
 }
 
@@ -1554,18 +1598,21 @@ pub enum Section {
     Drilling,
     MultiAxis,
     Turning,
+    /// The plasma table's work (#670): the torch's 2D through-cuts.
+    Plasma,
 }
 
 impl Section {
     /// The catalog's order, which is the ribbon's: the sections appear
     /// left to right in exactly this sequence, each one's kinds in the
     /// registry's own order (the row order is the product order).
-    pub const ORDER: [Section; 5] = [
+    pub const ORDER: [Section; 6] = [
         Section::Mill2D,
         Section::Mill3D,
         Section::Drilling,
         Section::MultiAxis,
         Section::Turning,
+        Section::Plasma,
     ];
 
     #[must_use]
@@ -1576,6 +1623,7 @@ impl Section {
             Section::Drilling => "Drilling",
             Section::MultiAxis => "Multi-axis",
             Section::Turning => "Turning",
+            Section::Plasma => "Plasma",
         }
     }
 
@@ -1586,6 +1634,7 @@ impl Section {
     pub fn family(self) -> Family {
         match self {
             Section::Turning => Family::Turn,
+            Section::Plasma => Family::Plasma,
             _ => Family::Mill,
         }
     }
@@ -1641,6 +1690,9 @@ pub fn shown_for(machine: crate::machine::Kind) -> Vec<Section> {
 pub enum Family {
     Mill,
     Turn,
+    /// The plasma table's torch work (#670): admitted on a plasma
+    /// table only - a mill-turn spins steel, it strikes no arc.
+    Plasma,
 }
 
 impl Family {
@@ -1653,8 +1705,31 @@ impl Family {
         use crate::machine::Kind;
         matches!(
             (self, machine),
-            (_, Kind::MillTurn) | (Family::Mill, Kind::Mill) | (Family::Turn, Kind::Lathe)
+            (Family::Mill | Family::Turn, Kind::MillTurn)
+                | (Family::Mill, Kind::Mill)
+                | (Family::Turn, Kind::Lathe)
+                | (Family::Plasma, Kind::Plasma)
         )
+    }
+
+    /// The family's work, in the words a refusal names ("milling work").
+    #[must_use]
+    pub fn work(self) -> &'static str {
+        match self {
+            Family::Mill => "milling",
+            Family::Turn => "turning",
+            Family::Plasma => "plasma cutting",
+        }
+    }
+
+    /// The machine the family's work needs, as a refusal names it.
+    #[must_use]
+    pub fn machine(self) -> &'static str {
+        match self {
+            Family::Mill => "mill",
+            Family::Turn => "lathe",
+            Family::Plasma => "plasma table",
+        }
     }
 }
 
@@ -2208,6 +2283,32 @@ impl KindInfo {
             seed: seed_probe,
             tool_kinds: tk::PROBE,
         },
+        KindInfo {
+            ty: OpType::PlasmaProfile,
+            label: "Plasma Profile",
+            caption: "Plasma Profile",
+            tag: 39,
+            // The torch cuts a kerf through the plate: the milling laws
+            // (tangency, reach, depth) have no torch to judge, so they
+            // stand down as for the centre-line ride; the plasma
+            // generator certifies its own kerf law (no lit move's kerf
+            // reaches the part) and #672 owns the plasma verdicts.
+            mode: Mode::Engrave,
+            section: Section::Plasma,
+            seed: super::plasma_op::seed_plasma_profile,
+            tool_kinds: tk::TORCH,
+        },
+        KindInfo {
+            ty: OpType::TrochoidalSlot,
+            label: "Trochoidal slot",
+            caption: "Trochoid",
+            tag: 40,
+            // The slot's authored stadium, hollowed: area laws rule.
+            mode: Mode::Area,
+            section: Section::Mill2D,
+            seed: seed_trochoidal_slot,
+            tool_kinds: tk::FLAT_MILLS,
+        },
     ];
 
     /// Whose machine this kind drives - read off the row's section
@@ -2280,6 +2381,8 @@ pub const ALL_LABELS: [&str; KIND_COUNT] = [
     KindInfo::ALL[36].label,
     KindInfo::ALL[37].label,
     KindInfo::ALL[38].label,
+    KindInfo::ALL[39].label,
+    KindInfo::ALL[40].label,
 ];
 
 impl OpType {
@@ -2338,6 +2441,11 @@ impl OpType {
             // in the Drilling section: a section's kinds are read by
             // `Section::kinds` in table order, not as a contiguous run.
             OpType::Probe => 38,
+            // #670: the plasma profile appends - the plasma table's
+            // section, its own run at the tail.
+            OpType::PlasmaProfile => 39,
+            // #220: appended after the plasma profile (39) (stored ids never move).
+            OpType::TrochoidalSlot => 40,
         }
     }
 

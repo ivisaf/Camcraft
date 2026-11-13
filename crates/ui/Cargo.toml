@@ -12,20 +12,34 @@ chrono = "0.4"
 camcraft-app = { workspace = true }
 flecs_ecs = { workspace = true }
 winit = { workspace = true }
-rfd = { workspace = true }
-pollster = { workspace = true }
 image = { workspace = true }
 # The shell stack (M1.4.2): egui + its winit/wgpu adapters + the dock
 # area. egui_wgpu re-exports wgpu - the unified workspace wgpu - so
 # viewport.rs and the renderer agree on types without a second dep line.
 egui = { workspace = true }
-egui-winit = { workspace = true }
 egui-wgpu = { workspace = true }
 egui_dock = { workspace = true }
 # Theme files (M6.1 B): the camcraft-theme/1 reader walks serde_json
 # Values directly - every refusal names the key it tripped on, which a
 # derived deserializer's error soup cannot promise.
 serde_json = { workspace = true }
+
+# #31: native-only - the winit adapter and the synchronous file/message
+# dialogs live in egui_app/shell_window and file_dialog's native half; the
+# wasm32 build leaves both out (egui-winit 0.36.2 does not compile there).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+egui-winit = { workspace = true }
+rfd = { workspace = true }
+# Blocking on a GPU future is native-only: a browser answers from its
+# event loop, so the wasm32 build awaits (the `*_async` twins) instead.
+pollster = { workspace = true }
+
+# #31: the browser shell (egui_app/shell_web) - eframe's web runner over a
+# canvas, started from JS through wasm-bindgen.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+eframe = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
 
 # #144: the Cmd+Q terminate hook (egui_app/os_quit.rs).
 [target.'cfg(target_os = "macos")'.dependencies]

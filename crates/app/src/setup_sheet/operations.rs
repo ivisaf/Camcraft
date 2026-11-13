@@ -167,6 +167,7 @@ fn kind_label(k: CycleKind) -> String {
         CycleKind::Peck => "peck",
         CycleKind::Deep => "deep-peck",
         CycleKind::Tap => "tap",
+        CycleKind::FloatingTap => "tap (floating holder)",
         CycleKind::Bore => "bore",
         CycleKind::BackBore => "back-bore",
     };
@@ -180,6 +181,7 @@ fn choice_label(c: CycleChoice) -> &'static str {
         CycleChoice::Drill => "Drill",
         CycleChoice::Peck => "Peck",
         CycleChoice::Tap => "Tap",
+        CycleChoice::FloatingTap => "Tap (floating holder)",
         CycleChoice::Bore => "Bore",
         CycleChoice::BackBore => "BackBore",
     }

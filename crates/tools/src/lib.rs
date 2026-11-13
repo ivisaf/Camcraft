@@ -10,11 +10,18 @@
 //! any vendor catalog file. The catalog is user data, not code -
 //! this crate only says what a tool record IS.
 
+pub mod catalog_asset;
+#[cfg(test)]
+mod catalog_asset_tests;
 pub mod cutting;
 // #368: a modelled tool body as the stack laws read it.
 pub mod holder_profile;
+// #793: the built-in BT/CAT taper holder library, drawn as spun profiles.
+pub mod holder_library;
 // #93: a drawn revolved (spun) profile for milling tools and holders.
 pub mod spun;
+// #93 slice 2: a milling tool's own drawn cutter, checked against its numbers.
+pub mod cutter_profile;
 // #369: a lathe-held body as the revolved-stock law reads it.
 pub mod lathe_holder;
 // #396: the insert plate a lathe body's judge leaves out.

@@ -27,6 +27,7 @@
 //! context and every function registered inside it is dropped first.
 
 pub(crate) mod api;
+pub use api::refusal_text;
 mod report;
 
 use crate::commands::History;
@@ -327,10 +328,14 @@ interface DocumentInfo {
 }
 
 interface VerifyReport {
+  /** The post's whole verdict: every op in scope fresh, the gate passed,
+   *  and no op in scope holding the post with its own warnings. */
   ok: boolean;
   operations: OperationInfo[];
   /** The program-level gate; skipped (with reason) while anything is stale. */
   gate: { ok: boolean; problems: string[]; skipped?: string };
+  /** Ops in scope whose own cached warnings refuse the post (#722). */
+  held_by: string[];
 }
 
 interface PostOptions {

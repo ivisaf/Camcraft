@@ -221,7 +221,9 @@ impl Ctl<'_> {
                 ('G', 100) => g10 = true,
                 ('G', 280) => home = true,
                 ('G', 540..=590) if code % 10 == 0 => self.active = (code / 10 - 54) as usize,
-                ('G', 170 | 400 | 430 | 490 | 800) => {}
+                // G21: the program's unit (#901) - this reader works in mm;
+                // G20 (inch) stays unmodelled, so an inch program is an error.
+                ('G', 170 | 210 | 400 | 430 | 490 | 800) => {}
                 ('M', 0) => return Ok(Flow::Stop(Stop::Halt("M0".into()))),
                 ('M', 20 | 300) => return Ok(Flow::Stop(Stop::End)),
                 ('M', 10 | 50 | 60 | 80 | 90) | ('T' | 'H' | 'F' | 'S', _) => {}

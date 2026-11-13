@@ -23,12 +23,16 @@
 mod arc_biarc;
 mod arc_cross;
 mod arc_proof;
+mod arc_leads;
 mod arcs;
 mod blend;
 mod bore;
 mod chamfer;
 mod circular;
 mod thread_mill;
+mod trochoid_air;
+mod trochoid_loops;
+mod trochoid_slot;
 mod contour;
 mod contour_bore;
 mod contour_chain;
@@ -47,6 +51,7 @@ mod face_entry;
 mod face_holes;
 mod fillet;
 mod gen_error;
+mod ghost;
 mod fillet_arc;
 mod fillet_tally;
 mod lead_ext;
@@ -82,6 +87,7 @@ pub use contour_link::DEFAULT_LEVEL_RAMP_ANGLE;
 pub use crate::links::{Link, Links};
 pub use face::{face, face_led, face_over, FaceParams, GenError, MAX_PASSES};
 pub use face_holes::FaceHoles;
+pub use ghost::Ghost;
 pub use face_entry::{air_lead, AIR_MARGIN};
 pub use fillet::{fillet_corners, Legal};
 pub use fillet_tally::{fillet_floor, FilletTally};
@@ -89,6 +95,11 @@ pub(crate) use levels::cut_levels;
 pub use pocket::{pocket, PocketParams, PocketStrategy};
 pub use ring::{on_boundary, ring_is_circular};
 pub use slots::{chord_clears, slot, trace, SlotParams, TraceParams};
+pub use trochoid_air::lifted_cut;
+pub use trochoid_slot::{
+    plan_trochoidal_slot, trochoidal_slot, TrochoidParams, TrochoidPlan, TrochoidReturn, DEFAULT_MAX_ENGAGEMENT,
+    DEFAULT_MICROLIFT,
+};
 pub use thread_mill::{thread_mill, ThreadHole, ThreadParams, THREAD_DEPTH_PER_PITCH};
 pub(crate) use pocket::plan_passes;
 pub(crate) use adaptive::PLAN_SAG;

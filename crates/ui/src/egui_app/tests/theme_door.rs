@@ -51,7 +51,7 @@ fn the_theme_door_sits_right_of_panels() {
 }
 
 #[test]
-fn the_theme_door_switches_the_theme_and_undo_restores_it() {
+fn the_theme_door_switches_the_theme_and_undo_leaves_it() {
     // #605: the pick lands through the frame-edge sync, which writes the
     // ONE process-wide live table (`theme::current()`); the structural
     // and snapshot tests assert on that table, so this test shares their
@@ -76,14 +76,13 @@ fn the_theme_door_switches_the_theme_and_undo_restores_it() {
     harness.run_steps(2);
     assert!(!harness.state().state.ribbon_theme_open, "a choice closes the list");
     assert_eq!(theme_of(&harness.state().state.world), ThemeRef::Named("light".into()));
+    // #877: the theme is the user's preference, not a document edit, so
+    // Ctrl+Z does not take it back.
     harness.state_mut().state.pending.push_back(CommandKind::Undo);
     harness.run_steps(3);
-    assert_eq!(theme_of(&harness.state().state.world), ThemeRef::Dark, "undo restores the theme");
-    harness.state_mut().state.pending.push_back(CommandKind::Redo);
-    harness.run_steps(3);
-    assert_eq!(theme_of(&harness.state().state.world), ThemeRef::Named("light".into()), "redo re-applies it");
+    assert_eq!(theme_of(&harness.state().state.world), ThemeRef::Named("light".into()), "undo leaves the theme");
     // Leave the house look for whatever frame follows.
-    harness.state_mut().state.pending.push_back(CommandKind::Undo);
+    harness.state_mut().state.pending.push_back(CommandKind::SelectTheme(ThemeRef::Dark));
     harness.run_steps(3);
     assert_eq!(theme_of(&harness.state().state.world), ThemeRef::Dark);
 }
@@ -104,7 +103,7 @@ fn the_theme_door_carries_the_colour_vision_modes() {
     assert_eq!(color_vision_of(&harness.state().state.world), ColorVision::Deutan);
     harness.state_mut().state.pending.push_back(CommandKind::Undo);
     harness.run_steps(3);
-    assert_eq!(color_vision_of(&harness.state().state.world), ColorVision::Off, "undo restores the mode");
+    assert_eq!(color_vision_of(&harness.state().state.world), ColorVision::Deutan, "undo leaves the mode (#877)");
 }
 
 #[test]

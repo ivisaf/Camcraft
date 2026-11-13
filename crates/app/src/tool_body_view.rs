@@ -20,7 +20,7 @@ use crate::geometry::{Point3, Triangle};
 use crate::model;
 use crate::schema::ToolBody;
 use crate::tool_body;
-use crate::tools::{Tool, ToolKind};
+use crate::tools::Tool;
 use camcraft_tools::spun::{SpunPoint, SpunProfile};
 
 /// The six model directions the editor offers as the tool axis.
@@ -41,15 +41,45 @@ pub fn axis_label(axis: [f64; 3]) -> Option<&'static str> {
     AXIS_CHOICES.iter().find(|(_, d)| dot(a, *d) > 1.0 - 1e-9).map(|(n, _)| *n)
 }
 
-/// Read a STEP / STL / OBJ for a tool body: its file name and its
-/// model-frame facets. Refuses an unreadable or empty file by name.
-pub fn load(path: &Path) -> Result<(String, Vec<Triangle>), String> {
+/// What loading a body from disk found: the source name, its facets, and
+/// the auto-alignment from ISO 13399 coordinate systems (#370) if present.
+pub struct LoadedBody {
+    pub source: String,
+    pub facets: Vec<Triangle>,
+    /// `Ok((axis, offset))` when aligned from ISO 13399 coordinate
+    /// systems; `Err(why)` when falling back to numeric placement.
+    pub alignment: Result<([f64; 3], f64), String>,
+}
+
+/// Read a STEP / STL / OBJ for a tool body: its file name, its
+/// model-frame facets, and automatic placement from ISO 13399 coordinate
+/// systems (#370) if present.
+pub fn load_aligned(path: &Path) -> Result<LoadedBody, String> {
     let mesh = crate::geometry::import::load_model(path).map_err(|e| e.to_string())?;
     if mesh.facets.is_empty() {
         return Err("the file holds no facets".into());
     }
     let source = path.file_name().map_or_else(|| path.display().to_string(), |f| f.to_string_lossy().into_owned());
-    Ok((source, mesh.facets.to_vec()))
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    let alignment = if ext == "step" || ext == "stp" {
+        match std::fs::read(path) {
+            Ok(data) => match crate::geometry::import::step_csys::read_tool_csys(&data) {
+                Ok(report) => report.align_tool_body(),
+                Err(e) => Err(format!("coordinate systems unreadable: {e}")),
+            },
+            Err(e) => Err(format!("I/O error: {e}")),
+        }
+    } else {
+        Err("not a STEP file (no coordinate systems)".into())
+    };
+    Ok(LoadedBody { source, facets: mesh.facets.to_vec(), alignment })
+}
+
+/// Read a STEP / STL / OBJ for a tool body: its file name and its
+/// model-frame facets. Refuses an unreadable or empty file by name.
+pub fn load(path: &Path) -> Result<(String, Vec<Triangle>), String> {
+    let loaded = load_aligned(path)?;
+    Ok((loaded.source, loaded.facets))
 }
 
 /// The placement as `SetToolBody` would judge it, without landing it:
@@ -72,6 +102,7 @@ pub fn spun_preview(tool: &Tool, points: &[SpunPoint]) -> Result<SpunProfile, St
         facets: std::sync::Arc::from(Vec::new()),
         frame: tool_body::BodyFrame::Spindle { axis: [0.0, 0.0, 1.0], offset: 0.0, profile: spun.holder_profile() },
         spun: None,
+        machine_default: false,
     };
     tool_body::fits(tool, &probe)?;
     Ok(spun)
@@ -189,40 +220,6 @@ pub(crate) fn revolve(prof: &[(f64, f64)]) -> Vec<Triangle> {
         }
     }
     out
-}
-
-/// The tool with no body, for display, tool frame: its whole
-/// `Tool::profile` revolved - cutter, shank, and the holder cylinder
-/// (Ø holder_d × holder_len on the shank top), the very cylinder
-/// `HolderStack::cylinder` hands the collision laws. `None` for the
-/// lathe insert kinds: their profile is a stand-in envelope (the truth
-/// lives in the work's meridian), so drawing it spun would show a tool
-/// that is not there - they keep the axis marker only.
-#[must_use]
-pub fn bare_assembly(tool: &Tool) -> Option<Vec<Triangle>> {
-    if matches!(tool.kind, ToolKind::Turning | ToolKind::Groove | ToolKind::Thread | ToolKind::Form) {
-        return None;
-    }
-    let prof: Vec<(f64, f64)> = tool.profile().into_iter().filter(|&(z, r)| z.is_finite() && r.is_finite()).collect();
-    let tris = revolve(&prof);
-    (!tris.is_empty()).then_some(tris)
-}
-
-/// The display assembly of the tool operation `op` runs, tool frame:
-/// with a body, [`assembly`]; without one, [`bare_assembly`] (`None`
-/// for the lathe insert kinds, which keep the marker only).
-#[must_use]
-pub fn assembly_for_operation(world: &World, op: &str) -> Option<Vec<Triangle>> {
-    let e = model::find_by_name(world, op)?;
-    let tool_name = model::operation_of(world, &e)?.tool;
-    let te = model::find_by_name(world, &tool_name)?;
-    let tool = model::tool_of(world, &te)?;
-    match tool_body::body_of(world, &te) {
-        // A lathe-frame body (#369) sits in the turning tool frame, not
-        // the spindle frame this assembly draws in: the bare tool stands.
-        Some(body) if body.profile().is_some() => Some(assembly(&tool, &body)),
-        _ => bare_assembly(&tool),
-    }
 }
 
 /// The body on the tool operation `op` runs, if that tool has one.

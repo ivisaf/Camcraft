@@ -122,7 +122,7 @@ pub(super) fn settle(file: &mut ProjectFile, from: u32) -> Result<Vec<String>, P
         let [x, y, z] = dto.translation;
         notes.push(format!(
             "dropped work offset '{}' (X{x:.3} Y{y:.3} Z{z:.3}): no setup posted it - since v54 a \
-             setup has one WCS, and G54-G59 is only the word its post writes",
+             setup has one WCS, and G54-G59 is only the work offset its post uses",
             dto.name
         ));
         false

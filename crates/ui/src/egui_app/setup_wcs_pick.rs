@@ -43,8 +43,8 @@ pub(super) fn picker(ui: &mut Ui, state: &mut State, setup: &str) {
             })
             .response
             .on_hover_text(
-                "The G-word the post writes for this setup's WCS. It only names the \
-                 controller register - the WCS origin stays where it is placed.",
+                "Which of G54-G59 the posted program uses for this setup. It only names the \
+                 controller's register - the origin stays where it is placed.",
             );
     });
     if chosen != current {

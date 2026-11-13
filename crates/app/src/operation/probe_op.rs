@@ -156,6 +156,10 @@ pub fn stylus_cutter(tool: &Tool) -> Cutter {
         shank_len: (g.flute_len - r).max(0.0),
         holder_radius: body_r,
         holder_len: body_len,
+        // The stylus folds shank and holder into one band (#835: a
+        // probe's body is judged by that enclosing band; the probe
+        // reach note names it).
+        body: None,
     }
 }
 

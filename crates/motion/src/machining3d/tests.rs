@@ -1,7 +1,7 @@
 //! Split from `machining3d.rs` by M5.0.1; structure only.
 
 use crate::geo2d::Point2;
-use crate::stock_sim::Dexel;
+use crate::stock_sim::{Columns, Dexel};
 use super::*;
 
 #[test]
@@ -15,17 +15,17 @@ fn a_chord_over_a_step_reads_half_engagement() {
             dex.set(iy * dex.nx + ix, if ix < 8 { 10.0 } else { 0.0 });
         }
     }
-    let ae = engagement(&dex, Point2::new(8.0, 4.0), Point2::new(8.0, 12.0), 5.0, 8.0);
+    let ae = engagement_on(&Columns::of_grid(&dex), Point2::new(8.0, 4.0), Point2::new(8.0, 12.0), 5.0, 8.0);
     assert!((ae - 0.5).abs() < 0.05, "half-bite read {ae}");
     // Pure air, and pure solid, at the same place.
     assert_eq!(dex.cells(), dex.nx * dex.ny);
     dex.fill(0.0);
-    let ae = engagement(&dex, Point2::new(8.0, 4.0), Point2::new(8.0, 12.0), 5.0, 8.0);
+    let ae = engagement_on(&Columns::of_grid(&dex), Point2::new(8.0, 4.0), Point2::new(8.0, 12.0), 5.0, 8.0);
     assert!(ae < 1e-9, "air must read zero, got {ae}");
     for k in 0..dex.cells() {
         dex.set(k, if k < 8 * dex.nx { 10.0 } else { 0.0 });
     }
-    let ae = engagement(&dex, Point2::new(8.0, 1.0), Point2::new(8.0, 2.0), 5.0, 0.5);
+    let ae = engagement_on(&Columns::of_grid(&dex), Point2::new(8.0, 1.0), Point2::new(8.0, 2.0), 5.0, 0.5);
     assert!((ae - 1.0).abs() < 1e-9, "solid must read full, got {ae}");
 }
 
@@ -34,14 +34,14 @@ fn a_zero_length_planar_move_reads_as_a_full_bite() {
     // The ambiguity law: no direction, no chord normal to measure -
     // the safe read is the heavy one.
     let dex = Dexel::block(0.0, 0.0, 4.0, 4.0, 10.0, 1.0).unwrap();
-    let ae = engagement(&dex, Point2::new(2.0, 2.0), Point2::new(2.0, 2.0), 5.0, 1.0);
+    let ae = engagement_on(&Columns::of_grid(&dex), Point2::new(2.0, 2.0), Point2::new(2.0, 2.0), 5.0, 1.0);
     assert!((ae - 1.0).abs() < 1e-12, "got {ae}");
 }
 
 #[test]
 fn the_sampler_reads_both_stock_engines_alike() {
     // M7.3: `engagement_on` is the same chord law on the seam's
-    // column reader - on the column arm it IS `engagement`, and the
+    // column reader - on the column arm it IS the direct `Dexel` read, and the
     // field arm must answer every chord identically (the sampler is
     // quantized, so equal means equal), with a fresh shelf beside the
     // first pass: half, full, and air bites all asked.
@@ -68,7 +68,10 @@ fn the_sampler_reads_both_stock_engines_alike() {
     for (a, b) in [((6.0, 2.0), (6.0, 10.0)), ((4.0, 3.0), (4.0, 9.0)), ((9.0, 2.0), (9.0, 10.0)), ((2.0, 6.0), (10.0, 6.0))] {
         let (a, b) = (Point2::new(a.0, a.1), Point2::new(b.0, b.1));
         let ec = engagement_on(&cc, a, b, -2.0, 2.0);
-        assert_eq!(ec, engagement(dex, a, b, -2.0, 2.0), "the column arm is the shipped sampler");
+        // The law the feed pass read straight off `Dexel` before it
+        // moved onto the seam (M7.3 4/6): one answer, bit for bit.
+        let direct = sample_engagement(|q| dex.col(q).map(|i| dex.top_at(i)), a, b, -2.0, 2.0);
+        assert_eq!(ec.to_bits(), direct.to_bits(), "the column arm is the shipped sampler");
         assert_eq!(ec, engagement_on(&cf, a, b, -2.0, 2.0), "field disagrees on {a:?} -> {b:?}");
         seen.push(ec);
     }

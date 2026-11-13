@@ -1,8 +1,8 @@
-//! camcraft-kernel - the B-rep kernel seam of M12.1, stages 1-2 (evaluation +
+//! camcraft-kernel - the B-rep kernel seam of M12.1, stages 1-3 (evaluation +
 //! agreement bench). A thin [`Kernel`] trait carries only the operations both
 //! candidate engines can be asked for: primitive construction (box, Z
 //! cylinder), the three booleans (subtract, union, intersect), whole-solid
-//! offset, constant-radius edge blends (round, chamfer), and a [`Measure`]
+//! offset, constant-radius edge blends (round, chamfer), healing, and a [`Measure`]
 //! (volume + bounding box) the bench compares. Nothing else in the workspace
 //! depends on this crate yet; truck stays the live engine.
 //!
@@ -23,6 +23,7 @@ mod error;
 mod measure;
 mod solidcore_blend;
 pub mod solidcore_impl;
+pub mod solidcore_import;
 #[cfg(feature = "truck")]
 pub mod truck_impl;
 
@@ -86,6 +87,12 @@ pub trait Kernel {
         radius: f64,
         kind: Blend,
     ) -> Result<Self::Solid, KernelError>;
+
+    /// Repairs gaps between a solid's vertices, edges and faces (the fix-up
+    /// an imported model needs) and hands it back only if it is a closed
+    /// solid afterwards. Engines without healing return
+    /// [`KernelError::Unsupported`].
+    fn heal(&mut self, s: Self::Solid) -> Result<Self::Solid, KernelError>;
 
     /// Volume and bounding box of a closed solid.
     fn measure(&mut self, s: &mut Self::Solid) -> Result<Measure, KernelError>;

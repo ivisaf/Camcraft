@@ -26,8 +26,9 @@ order of the steps. Load the `gh-issues` skill for the `gh` mechanics.
   `gh issue comment N --body "claimed: issue-worker-<tier> (<model>) · <UTC> · worktree/branch issue/N-<slug> · plan: <one line>"`.
 - In a fork, follow AGENTS.md's fork sync first (process files, cut tag).
 - `git fetch origin && git worktree add --no-track -b issue/N-<slug> .claude/worktrees/issue-N origin/main`;
-  work only there, with `CARGO_TARGET_DIR` inside the worktree. Never build
+  work only there, with the worktree's own default `target/` (not a `CARGO_TARGET_DIR` env var: sccache hashes it, so the shared compile cache would miss across worktrees; AGENTS.md "Testing"). Never build
   in the main checkout. Check free disk first (10-20 GB per target).
+- Build cache: Prefer `cargo xtask gate ...` (it turns the compile cache on); for a direct cargo call set `RUSTC_WRAPPER=sccache` only when `sccache` is on PATH (cargo fails if the wrapper is missing), and never export `CARGO_TARGET_DIR`.
 
 ## 2. Fix
 - Smallest change that meets the issue's "Done means". Follow AGENTS.md:

@@ -54,9 +54,13 @@ fn profile_projection() -> bool {
 }
 
 fn project_timed(facets: &[Triangle], samples: usize, cacheable: bool) -> Result<Region, SliceError> {
-    let started = std::time::Instant::now();
+    // The clock is read only when profiling is on (#31): std's
+    // `Instant::now()` panics on wasm32-unknown-unknown, where the
+    // environment variable can never be set, so the browser build never
+    // touches it.
+    let started = profile_projection().then(std::time::Instant::now);
     let result = project_uncached(facets, samples);
-    if profile_projection() {
+    if let Some(started) = started {
         eprintln!(
             "profile: projection {} facets={} samples={} elapsed={} ms result={}",
             if cacheable { "cache miss" } else { "uncached large mesh" },

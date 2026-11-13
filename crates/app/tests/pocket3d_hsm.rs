@@ -91,7 +91,31 @@ fn the_users_bore_roughs_adaptive_level_by_level_and_verifies_clean() {
         let line = path.status_summary("Op1", 0, camcraft_app::units::Unit::Millimeters);
         assert!(line.contains("Offset rings"), "{line}");
     }
+    // Issue #850: the growth planner's budgets never refuse a level of
+    // the bore (its finely tessellated outline is heavy geometry over a
+    // short walk); only the levels whose plan would cross itself go to
+    // the rings. A budget that cut a level would change the path silently
+    // under the assertions above.
+    assert!(!path.notes.iter().any(|n| n.contains("planning budget") || n.contains("too detailed")), "{:?}", path.notes);
+    // Which levels fall back (measured on main f490458a): Z 20 and Z 10,
+    // each because its HSM plan would cross itself. Until PR #839 (merge
+    // 575f02d8, issue #689) only Z 20 did: #839 caps the STEP chord at
+    // 0.005 mm (it was ~0.1% of the model extent), so the bore's wall is
+    // meshed far finer, the level outlines the planner works on change,
+    // and the Z 10 plan now crosses itself at (-1.99, -0.13). Getting
+    // that level's HSM plan back is Refs #980 (part 2).
+    let mut fell_z: Vec<&str> = fell.iter().filter_map(|n| ["Z 20.000", "Z 10.000"].into_iter().find(|z| n.contains(z))).collect();
+    fell_z.sort_unstable();
+    assert!(fell.len() == 2 && fell_z == ["Z 10.000", "Z 20.000"], "{fell:?}");
+    assert!(fell.iter().all(|n| n.contains("crosses itself")), "{fell:?}");
+    // The path as main plans it (measured on main f490458a, identical over
+    // repeated runs, and on 575f02d8 alike: 6500 moves, 6464 planar feeds, 222
+    // arcs; before #839, on 575f02d8^1: 5530 / 5497 / 600). #839's finer
+    // mesh moves them: a second rings level (no arcs, more chords) and
+    // fewer fitted arcs on the HSM levels. A change to the planner or the
+    // mesh that moves these re-measures them and says why.
     println!("moves {} planar {planar} arcs {arcs} notes {:?}", path.moves.len(), path.notes);
+    assert_eq!((path.moves.len(), planar, arcs), (6500, 6464, 222), "the bore's path as main plans it: {:?}", path.notes);
 }
 
 #[test]

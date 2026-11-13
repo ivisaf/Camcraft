@@ -189,3 +189,72 @@ fn arc_chords_stay_inside_gouge_tolerance() {
     assert_eq!(m.chords(0.0).len(), cs.len(), "tol 0 uses the default, not infinity");
     assert_eq!(m.chords(f64::NAN).len(), cs.len(), "NAN tol likewise");
 }
+
+/// Every vertex an arc of `segs` replaced, from `pts` (the fitter's
+/// input, whose first point is where the walk starts), paired with the
+/// arc's centre and its radius at the arc's end.
+fn arc_vertices(pts: &[Point2], segs: &[Seg]) -> Vec<(Point2, Point2, f64)> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    for s in segs {
+        match s {
+            Seg::Line(qs) => at += qs.len(),
+            Seg::Arc { center, to, .. } => {
+                let end = (at + 1..pts.len()).find(|&k| pts[k] == *to).expect("an arc ends on an input vertex");
+                let r = ((to.x - center.x).powi(2) + (to.y - center.y).powi(2)).sqrt();
+                for p in &pts[at..=end] {
+                    out.push((*p, *center, r));
+                }
+                at = end;
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn a_fitted_arc_keeps_every_vertex_within_half_the_tolerance() {
+    // #689: a vertex off the fitted circle is a point the plan verified
+    // that the arc passes beside - toward the part as often as away -
+    // and the gouge verdict forgives exactly `tol` against a mesh whose
+    // chords already spend part of it. A rim whose odd vertices stand
+    // 0.008 mm out (inside the old full budget, past the half share)
+    // must never come back as an arc that strays 0.008 from them.
+    let tol = 0.01;
+    let mut pts = ring(p2(0.0, 0.0), 35.0, 400);
+    for (k, p) in pts.iter_mut().enumerate() {
+        if k % 2 == 1 {
+            let r = (p.x * p.x + p.y * p.y).sqrt();
+            *p = p2(p.x * (r + 0.008) / r, p.y * (r + 0.008) / r);
+        }
+    }
+    let segs = fit_arcs(&pts, tol);
+    for (p, c, r) in arc_vertices(&pts, &segs) {
+        let d = (((p.x - c.x).powi(2) + (p.y - c.y).powi(2)).sqrt() - r).abs();
+        assert!(d <= tol * 0.5 + 1e-6, "vertex ({}, {}) stands {d} mm off its arc", p.x, p.y);
+    }
+    // An honest rim still fits whole: the share costs true circles nothing.
+    let clean = fit_arcs(&ring(p2(0.0, 0.0), 35.0, 400), tol);
+    assert!(clean.iter().all(|s| matches!(s, Seg::Arc { .. })), "a true circle is arcs only: {clean:?}");
+}
+
+#[test]
+fn a_closed_rim_fits_whole_in_either_direction() {
+    // #689: a closing ring's turning direction came from an anchor
+    // triple that read a regular rim backwards, so the fit failed its
+    // first step and the ring's last chord walked as a line - which the
+    // Ø25 hole's lead-out on Milling-test.step then crossed. Both
+    // windings now close on arcs alone, the last one ending on the seam.
+    for ccw in [true, false] {
+        let mut pts = ring(p2(3.0, -2.0), 7.5, 113);
+        if !ccw {
+            pts.reverse();
+        }
+        let segs = fit_arcs(&pts, 0.01);
+        assert!(
+            segs.iter().all(|s| matches!(s, Seg::Arc { ccw: c, .. } if *c == ccw)),
+            "a closed rim is arcs only, turning its own way (ccw {ccw}): {segs:?}"
+        );
+        assert!(matches!(segs.last(), Some(Seg::Arc { to, .. }) if Some(to) == pts.last()), "the last arc closes on the seam");
+    }
+}

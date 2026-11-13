@@ -23,6 +23,9 @@ impl LoadMachine {
     /// `None` clears the setup - the checker then checks nothing, by
     /// the unstated-limit law, and that is stated, not silent.
     pub fn new(world: &World, path: String, machine: Option<Machine>) -> Result<Self, CommandError> {
+        if let Some(r) = machine.as_ref().and_then(machine::tooling_refusal) {
+            return Err(CommandError::Invalid(format!("machine {r}")));
+        }
         if let Some(m) = &machine
             && !m.is_sane()
         {
@@ -50,7 +53,7 @@ impl LoadMachine {
     pub fn from_file(world: &World, path: &std::path::Path) -> Result<Self, CommandError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| CommandError::Invalid(format!("machine file {}: {e}", path.display())))?;
-        let m = crate::machine::parse_mch(&text).map_err(CommandError::Invalid)?;
+        let m = crate::machine::parse_mch(&text).map_err(|e| CommandError::Invalid(format!("{}: {e}", path.display())))?;
         Self::new(world, path.display().to_string(), Some(m))
     }
 

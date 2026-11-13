@@ -18,7 +18,7 @@ use camcraft_motion::machining3d::{
     Entry3D, FFO_FLOOR, Pocket3DParams, engagement_step, material_above, optimize_feed, pocket3d,
     pocket3d_prev, pocket3d_with_rest, pocket3d_with_rest_prev,
 };
-use camcraft_motion::stock_sim::Dexel;
+use camcraft_motion::stock_sim::{Columns, Dexel};
 use camcraft_motion::verify::{Mode, ToolGeom, VerifyContext, verify};
 
 fn p(x: f64, y: f64, z: f64) -> Point3 {
@@ -918,7 +918,7 @@ fn a_prev_mask_only_ever_removes_cuts() {
             }
         }
     }
-    let masked = pocket3d_prev(&f, &region, &pp, Some(&mask)).expect("the right half cuts");
+    let masked = pocket3d_prev(&f, &region, &pp, Some(&Columns::of_grid(&mask))).expect("the right half cuts");
     assert!(
         masked.moves.len() < full.moves.len(),
         "masked {} vs full {}",
@@ -949,13 +949,13 @@ fn a_fully_machined_mask_refuses_rather_than_cutting_air() {
     let pp = params(Entry3D::Plunge, 0.0);
     let mask = Dexel::block(-20.0, -20.0, 20.0, 20.0, -10.0, 1.0).unwrap();
     assert!(matches!(
-        pocket3d_prev(&f, &region, &pp, Some(&mask)),
+        pocket3d_prev(&f, &region, &pp, Some(&Columns::of_grid(&mask))),
         Err(GenError::Empty(_))
     ));
     // The rest-rough variant refuses from its coarse leg too, before
     // spending a single rest-ladder step.
     assert!(matches!(
-        pocket3d_with_rest_prev(&f, &region, &pp, Some(&mask)),
+        pocket3d_with_rest_prev(&f, &region, &pp, Some(&Columns::of_grid(&mask))),
         Err(GenError::Empty(_))
     ));
 }

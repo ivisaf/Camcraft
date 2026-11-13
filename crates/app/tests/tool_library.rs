@@ -226,3 +226,19 @@ fn an_export_name_without_a_suffix_gets_the_library_extension() {
     assert_eq!(with_library_extension(Path::new("/tmp/shop.json")), Path::new("/tmp/shop.json"));
     assert_eq!(with_library_extension(Path::new("/tmp/my.tools/shop")), Path::new("/tmp/my.tools/shop.camtools"));
 }
+
+/// #741: the starter catalog is the asset `assets/tools/catalog.json`, in
+/// this very `camcraft-tools/1` format. The strict app reader and the
+/// tools crate's own reader (which `catalog()` uses) must agree on it,
+/// tool for tool.
+#[test]
+fn the_shipped_catalog_asset_reads_the_same_through_the_library_reader() {
+    let text = include_str!("../../../assets/tools/catalog.json");
+    let lib = parse_tool_library(text).expect("shipped catalog is a valid tool library");
+    let cat = catalog();
+    assert_eq!(lib.len(), cat.len());
+    for (l, (name, t)) in lib.iter().zip(cat.iter()) {
+        assert_eq!(l.name, *name);
+        assert_eq!(l.tool, *t, "{name}");
+    }
+}

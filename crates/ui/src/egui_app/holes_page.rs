@@ -101,6 +101,7 @@ pub(super) fn fields(ui: &mut Ui, world: &World, params: &mut OpParams, cx: &mut
                         2 => camcraft_app::drilling::CycleChoice::Drill,
                         3 => camcraft_app::drilling::CycleChoice::Peck,
                         4 => camcraft_app::drilling::CycleChoice::Tap,
+                        7 => camcraft_app::drilling::CycleChoice::FloatingTap,
                         5 => camcraft_app::drilling::CycleChoice::Bore,
                         6 => camcraft_app::drilling::CycleChoice::BackBore,
                         _ => camcraft_app::drilling::CycleChoice::Auto,

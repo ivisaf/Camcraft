@@ -7,7 +7,7 @@ use crate::cl::{Move, MoveKind, Toolpath};
 use crate::geo2d::{Point2, Region};
 use crate::geometry::{Point3, Triangle};
 use crate::machining2d::GenError;
-use crate::stock_sim::{self, Dexel};
+use crate::stock_sim::{self, Backend, Stock};
 /// How far below the programmed feed the modulation may take a planar
 /// cut move. One quarter is a handbook-style floor for a roughing
 /// bite: below it the chip is too thin to evacuate in steel and the
@@ -36,23 +36,20 @@ pub const FFO_FLOOR: f64 = 0.25;
 /// it cuts. A move that engages nothing at either station - the
 /// zero-depth skin of the first level, air moves - reads exactly 0
 /// and is held at the programmed feed (there is no load to pay for).
-pub(super) fn engagement(dex: &Dexel, from: Point2, to: Point2, z: f64, r: f64) -> f64 {
-    sample_engagement(|q| dex.col(q).map(|i| dex.top_at(i)), from, to, z, r)
-}
-
-/// The same sampler read off either stock engine (M7.3): the seam's
-/// column reader answers `col`-then-`top_at` on the column arm and the
-/// verdict march on the field arm, so the heavy agreement lane asks
-/// both engines this law's question and demands one answer. Not on
-/// the feed pass's path yet - the column arm still owns `optimize_feed`.
+///
+/// Read off either stock engine (M7.3): the seam's column reader
+/// answers `col`-then-`top_at` on the column arm and the verdict march
+/// on the field arm, so the heavy agreement lane asks both engines
+/// this law's question and demands one answer. `optimize_feed` reads
+/// it through the same seam (M7.3 4/6), on the column arm.
 #[must_use]
 pub fn engagement_on(cols: &stock_sim::Columns<'_>, from: Point2, to: Point2, z: f64, r: f64) -> f64 {
     sample_engagement(|q| cols.top_over(q), from, to, z, r)
 }
 
-/// The chord law of [`engagement`], over any column-top source:
+/// The chord law of [`engagement_on`], over any column-top source:
 /// `top(q)` is the top standing in `q`'s column, None off the grid.
-fn sample_engagement(top: impl Fn(Point2) -> Option<f64>, from: Point2, to: Point2, z: f64, r: f64) -> f64 {
+pub(super) fn sample_engagement(top: impl Fn(Point2) -> Option<f64>, from: Point2, to: Point2, z: f64, r: f64) -> f64 {
     const HALF: i32 = 8; // r/8 chord resolution, one lattice step per side
     let (dx, dy) = (to.x - from.x, to.y - from.y);
     let len = (dx * dx + dy * dy).sqrt();
@@ -118,8 +115,8 @@ pub fn optimize_feed(
         if m.kind == MoveKind::Feed && m.arc.is_none() && (m.to.z - m.from.z).abs() <= EPS {
             bites.push((
                 i,
-                engagement(
-                    &dex,
+                engagement_on(
+                    &dex.columns()?,
                     Point2::new(m.from.x, m.from.y),
                     Point2::new(m.to.x, m.to.y),
                     m.to.z,
@@ -127,7 +124,7 @@ pub fn optimize_feed(
                 ),
             ));
         }
-        dex.subtract(m, r, CHORD_TOL);
+        dex.subtract_flat(m, r, CHORD_TOL)?;
     }
     if !bites.is_empty() {
         // The anchor is the median of the *loaded* bites only: an
@@ -163,6 +160,7 @@ pub fn optimize_feed(
         threads: path.threads.clone(),
         probes: path.probes.clone(),
         breaks: path.breaks.clone(),
+        plasma: path.plasma.clone(),
     };
     if !out.all_finite() {
         return Err(GenError::Invalid("feed modulation broke the finite horizon".into()));
@@ -196,23 +194,30 @@ pub(super) fn sim_of(
     facets: &[Triangle],
     footprint: &Region,
     p: &Pocket3DParams,
-) -> Result<(Dexel, Vec<f64>), GenError> {
+) -> Result<(Stock, Vec<f64>), GenError> {
     let (lo, hi) = footprint
         .bounds()
         .ok_or_else(|| GenError::Invalid("footprint has no bounds".into()))?;
     let cell = (p.tool_diameter * 0.5).min(p.tiling_step() * 0.5);
-    let mut dex = Dexel::block(lo.x, lo.y, hi.x, hi.y, p.top_z, cell)?;
-    let part = stock_sim::part_surface(facets, dex.x0, dex.y0, dex.cell, dex.nx, dex.ny);
-    for (k, &pt) in part.iter().enumerate() {
-        if pt > dex.top_at(k) {
-            dex.set(k, pt);
-        }
-    }
+    let mut dex = Stock::block(Backend::Column, lo.x, lo.y, hi.x, hi.y, p.top_z, cell)?;
+    let part = part_of(facets, &dex)?;
+    dex.set_tops(|k, _, top| match part.get(k) {
+        Some(&pt) if pt > top => pt,
+        _ => top,
+    })?;
     Ok((dex, part))
 }
 
-/// The column engine's door, kept at motion's direct `Dexel::subtract`
-/// calls too (M13.7): the dexel atom stands upright on +Z, so a posed
+/// The model's surface sampled on `dex`'s own lattice (one height per
+/// column, row-major) - the part `stock_sim::measure` judges against.
+fn part_of(facets: &[Triangle], dex: &Stock) -> Result<Vec<f64>, GenError> {
+    let cols = dex.columns()?;
+    let o = cols.origin();
+    Ok(stock_sim::part_surface(facets, o.x, o.y, cols.cell(), cols.nx(), cols.ny()))
+}
+
+/// The column engine's door, kept at motion's own subtract calls too
+/// (M13.7): the dexel atom stands upright on +Z, so a posed
 /// cutting move lowered through it is a tilted tool cut vertically - a
 /// silent wrong stock. Refused by name with the engine's own text
 /// ([`stock_sim::POSED_REFUSAL`]) before a single column is touched.
@@ -225,10 +230,10 @@ pub(super) fn refuse_posed(moves: &[Move]) -> Result<(), GenError> {
 
 /// Lower `dex` by every move of `moves` with the upright flat tool of
 /// radius `r`, after [`refuse_posed`] - the only way motion subtracts.
-pub(super) fn subtract_upright(dex: &mut Dexel, moves: &[Move], r: f64) -> Result<(), GenError> {
+pub(super) fn subtract_upright(dex: &mut Stock, moves: &[Move], r: f64) -> Result<(), GenError> {
     refuse_posed(moves)?;
     for m in moves {
-        dex.subtract(m, r, CHORD_TOL);
+        dex.subtract_flat(m, r, CHORD_TOL)?;
     }
     Ok(())
 }

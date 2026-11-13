@@ -152,11 +152,27 @@ impl Rest<'_, '_> {
         }
     }
 
-    /// Law (c)/(c3) backstop: uncut hidden stock inside the band annulus
-    /// `r_in < |q - pc| <= r_out` at the band's bottom `h`, against the
-    /// cuts of the moves before `upto`.
-    pub(super) fn hidden_in_annulus(&self, pc: Point2, r_in: f64, r_out: f64, h: f64, upto: usize) -> bool {
-        if !(r_out > r_in && pc.x.is_finite() && pc.y.is_finite()) {
+    /// Law (c)/(c3) backstop: uncut hidden stock inside the band's disc
+    /// `|q - pc| <= r_out` but outside the cutter's own column
+    /// `|q - tip| <= r_in` at the band's bottom `h`, against the cuts of
+    /// the moves before `upto`. Upright, `tip == pc` and this is the
+    /// annulus it always was; leaning (#903), the band's disc moves off
+    /// the tip and the flutes' kerf stays where the tip cut - the disc
+    /// under a leaning band is not material the cutter cleared.
+    pub(super) fn hidden_in_annulus(
+        &self,
+        pc: Point2,
+        tip: Point2,
+        r_in: f64,
+        r_out: f64,
+        h: f64,
+        upto: usize,
+    ) -> bool {
+        if !(r_out > 0.0 && pc.x.is_finite() && pc.y.is_finite() && tip.x.is_finite() && tip.y.is_finite()) {
+            return false;
+        }
+        let upright = pc == tip;
+        if upright && r_out <= r_in {
             return false;
         }
         let hid = match self.hidden_near(h, pc, pc, r_out) {
@@ -165,16 +181,22 @@ impl Rest<'_, '_> {
             Ok(Some(hid)) => hid,
         };
         let (i2, o2) = (r_in * r_in, (r_out + 1e-9) * (r_out + 1e-9));
-        let in_ring = |q: &Point2| {
-            let dd = dist2_seg(*q, pc, pc);
-            dd > i2 && dd <= o2
+        let in_ring = |q: &Point2| dist2_seg(*q, pc, pc) <= o2 && dist2_seg(*q, tip, tip) > i2;
+        // Upright, the three rings stand in the annulus as they always
+        // did; leaning, the excluded disc is off-centre, so the probe
+        // rings cover the whole band disc (the filter drops the kerf).
+        let radii: Vec<f64> = if upright {
+            vec![r_in + (r_out - r_in) * 0.02, (r_in + r_out) * 0.5, r_out]
+        } else {
+            vec![r_out * 0.25, r_out * 0.5, r_out * 0.75, r_out]
         };
-        let rings = [r_in + (r_out - r_in) * 0.02, (r_in + r_out) * 0.5, r_out].into_iter().flat_map(|rad| {
+        let centre = (!upright).then_some(pc);
+        let rings = centre.into_iter().chain(radii.into_iter().flat_map(|rad| {
             (0..RING).map(move |k| {
                 let t = std::f64::consts::TAU * k as f64 / RING as f64;
                 Point2::new(pc.x + rad * t.cos(), pc.y + rad * t.sin())
             })
-        });
+        }));
         rings
             .chain(hid.samples.iter().copied())
             .filter(in_ring)

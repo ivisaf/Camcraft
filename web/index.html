@@ -1,0 +1,56 @@
+<!doctype html>
+<!-- index.html - the page that loads the CamCraft browser shell (#31).
+     Our own page: a full-window canvas for eframe's web runner, a status
+     line the shell writes its start-up state and refusals into, an import
+     map that answers the module's WASI imports with web/wasi_shim.js, and
+     the module script that instantiates camcraft-ui and starts the shell.
+     Built next to its files by web/build-app-wasm.sh; serve the folder
+     over http (a file:// page cannot load a module). -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CamCraft</title>
+  <link rel="icon" href="data:,">
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1b1f; }
+    #camcraft-canvas { display: block; width: 100%; height: 100%; }
+    #camcraft-status {
+      position: absolute; left: 0; right: 0; top: 40%;
+      margin: 0 auto; max-width: 40em; padding: 1em;
+      font: 15px/1.4 system-ui, sans-serif; color: #e6e6e6; text-align: center;
+    }
+    #camcraft-status[data-state="running"] { display: none; }
+    #camcraft-status[data-state="refused"] { color: #ffb4a8; }
+  </style>
+  <script type="importmap">
+    { "imports": { "wasi_snapshot_preview1": "./wasi_shim.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="camcraft-canvas"></canvas>
+  <div id="camcraft-status" role="status" data-state="loading">Loading CamCraft...</div>
+  <script type="module">
+    import init, { camcraft_start } from "./camcraft-ui.js";
+    import { bind_memory } from "./wasi_shim.js";
+
+    const status = document.getElementById("camcraft-status");
+    const refuse = (err) => {
+      status.dataset.state = "refused";
+      status.textContent = `CamCraft cannot start in this browser: ${err && err.message ? err.message : err}`;
+      console.error(err);
+    };
+    // A failure after start-up (the engine stopping, a script error) is
+    // said on the page too, never left as a frozen canvas.
+    window.addEventListener("error", (e) => refuse(e.error || e.message));
+    window.addEventListener("unhandledrejection", (e) => refuse(e.reason));
+    try {
+      const wasm = await init();
+      bind_memory(wasm.memory);
+      camcraft_start("camcraft-canvas");
+    } catch (err) {
+      refuse(err);
+    }
+  </script>
+</body>
+</html>

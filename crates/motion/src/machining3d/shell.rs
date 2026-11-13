@@ -38,7 +38,7 @@
 //! is a long ring chord running past the step: at the crossing, the
 //! leg's interpolated Z rises from the dive's floor tip toward the far
 //! endpoint's, and while the disc still covers the step's column the
-//! leg rides BELOW T - the sim (`stock_sim::Dexel::cut_chord`, which
+//! leg rides BELOW T - the sim (the column arm's `stock_sim::Stock::cut_chord`, which
 //! removes everything above the chord's lowest reached Z at each
 //! touched cell) drops the step's column below the model surface. A
 //! gouge.

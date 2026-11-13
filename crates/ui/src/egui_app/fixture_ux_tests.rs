@@ -98,7 +98,10 @@ fn use_as_fixture_binds_to_the_active_setup_and_fixtures_offers_import() {
     assert!(matches!(&rows[1].1, Some(CommandKind::TagFixture { setup: Some(s), .. }) if s == "Setup1"));
 
     let rows = menu_rows(&state, &TreeMenuTarget::Fixtures("Setup1".into()));
-    assert_eq!(labels(&rows), ["Fixtures", "Import fixture…", "Save fixture to library…", "Insert from library…"]);
+    assert_eq!(
+        labels(&rows),
+        ["Fixtures", "Import fixture…", "Save fixture to library…", "Insert from library…", "Add built-in vise…", "Add accessory…", "Add fixture plate…"]
+    );
     assert!(matches!(rows[1].1, Some(CommandKind::ImportFixtureDialog)));
     // The Fixtures node the menu anchors on stands in the tree.
     let (_, leaves) = browser_rows(&state);

@@ -102,6 +102,27 @@ impl Sweep {
         window_of(self, cell, cap, ax)
     }
 
+    /// Does the solid span the world above its tip - hold every point
+    /// above any point it holds, up to height `z`? The monotone law
+    /// `field_floor` reads a cut floor by (#637 E1): true only for an
+    /// upright axis and a flank or shank that reaches `z` from the
+    /// lowest anchor. The truncated taper, the bare ball and the
+    /// lathe's revolved sweep are bounded.
+    pub(crate) fn spans_above(&self, ax: [f64; 3], z: f64) -> bool {
+        if ax != [0.0, 0.0, 1.0] {
+            return false;
+        }
+        match self {
+            Sweep::Lathe(_) | Sweep::Ball { .. } => false,
+            Sweep::Shanked { c0, c1, up, .. } => c0.z.min(c1.z) + up[2] >= z,
+            Sweep::Revolve { a, b, kind } => match kind {
+                RevKind::Flat { flank, .. } | RevKind::Bull { flank, .. } => a.z.min(b.z) + flank >= z,
+                RevKind::Taper { .. } => false,
+            },
+            Sweep::Arc(p) => p.spans_above(z),
+        }
+    }
+
     /// How far `dist` may sit ABOVE the true distance: the golden
     /// section's final bracket times the path length (the anchor
     /// moves `|b - a|` per unit t, and one pose's distance is

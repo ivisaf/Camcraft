@@ -401,7 +401,8 @@ fn contour_impl(
 
     let path = b.finish();
     if let Some(why) = crate::approach::refusal(&path) {
-        return Err(GenError::Invalid(why));
+        // #261 part 3: the moves built so far ride the refusal, display-only.
+        return Err(GenError::Invalid(why).with_ghost(&path));
     }
     if !path.all_finite() {
         return Err(GenError::Invalid("path left the finite horizon".into()));

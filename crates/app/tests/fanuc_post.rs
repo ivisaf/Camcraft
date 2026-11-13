@@ -38,6 +38,7 @@ const GOLDENS: &[&str] = &[
     "drill_plate",
     "drill_peck",
     "tap_plate",
+    "trochoid_slot_small",
 ];
 
 #[test]

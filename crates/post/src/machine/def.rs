@@ -9,6 +9,9 @@
 //! document glue and the program checker stay in the parent module.
 
 use super::direction::AxisDirection;
+// #669: the kind moved to its own seam; re-exported so `def::*` (and
+// every `machine::Kind` path) reads as before.
+pub use super::kind::{can_tilt, kind, Kind};
 use serde::{Deserialize, Serialize};
 
 /// One axis as the machine file describes it - prismatic or, since
@@ -55,6 +58,23 @@ pub struct AxisLimits {
     /// file's `"direction": 1 | -1`; the program frame never changes.
     #[serde(default, skip_serializing_if = "AxisDirection::is_standard")]
     pub direction: AxisDirection,
+    /// A rotary that turns the WORK, not the spindle (#804): the file
+    /// places it outside the head's chain (no `head` part below it), as
+    /// a 4th-axis table bolted to the bed is. Read by the index-swing
+    /// clause of the program gate. `Some(false)` for a head's own tilt,
+    /// `None` for every linear axis - and for a rotary read back from a
+    /// project saved before #804, which never stated it (#813: the load
+    /// names such a machine so it is reloaded, never silently unjudged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns_part: Option<bool>,
+    /// How far the spindle nose sits above this rotary's centerline
+    /// with Z at the post's `safe_retract`, mm (#804): the file's
+    /// `"nose_to_axis"`. With WCS Y0 Z0 on the centerline (the indexed
+    /// post's setup law) it puts the retracted tool tip in program Z.
+    /// `None` = unstated, and an index on a work-turning A is refused
+    /// by name rather than guessed clear.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nose_to_axis: Option<f64>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -173,6 +193,16 @@ pub struct Machine {
     /// post that needs it refuses rather than guess where up is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub safe_retract_z: Option<f64>,
+    /// The holder system the spindle takes (#828): `tooling.spindle_mount`,
+    /// one of [`super::SPINDLE_MOUNTS`]. Unstated reads `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spindle_mount: Option<String>,
+    /// The built-in library holder a NEW tool on this machine starts
+    /// with (#828): `tooling.default_holder`, the library's own name
+    /// ("BT30 ER20"). Never applied to an existing tool; `None` adds a
+    /// tool with no holder body, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_holder: Option<String>,
 }
 
 /// The words a control needs around C-axis live-tool work (issue
@@ -190,129 +220,6 @@ pub struct LiveToolCodes {
     pub spindle_off: String,
 }
 
-/// What a machine is, inferred from its axis inventory (M3.2 stage E -
-/// the workspaces-by-kind law, refined by M5.1 stage A). Provenance:
-/// general machine-tool practice - a mill moves a cutter in X, Y and
-/// Z; a lathe turns the part and moves a tool in X and Z only; a
-/// mill-turn does both, which an ordinary file reveals as a Y axis
-/// with a TURNING rotary among its axes: one whose direction is the Z
-/// column (a C table) or unstated. A rotary that states a LEANING
-/// direction (an A or B head or trunnion) tilts a milling cutter and
-/// turns nothing - a Y machine with only those is still a [`Kind::Mill`],
-/// five axes of it. The inference stays deliberately the minimal
-/// honest one: anything the axis list cannot decide - an unnamed file,
-/// a file with no X/Z pair - reads [`Kind::Mill`], because a mill is
-/// what every assumption in this codebase currently is, and an
-/// invented lathe workspace would be the silent wrong answer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    Mill,
-    Lathe,
-    MillTurn,
-}
-
-impl Kind {
-    /// The word the pages and tips use for the kind.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Kind::Mill => "milling",
-            Kind::Lathe => "turning",
-            Kind::MillTurn => "mill-turning",
-        }
-    }
-
-    /// The word a machine file writes for this kind - the canonical
-    /// spelling the editor's combo emits, the subset `from_word`
-    /// accepts.
-    #[must_use]
-    pub const fn word(self) -> &'static str {
-        match self {
-            Kind::Mill => "mill",
-            Kind::Lathe => "lathe",
-            Kind::MillTurn => "mill-turn",
-        }
-    }
-
-    /// Read a declared kind word (M3.3 stage C): case- and
-    /// punctuation-tolerant over the public vocabulary (a mill is
-    /// also "milling", a lathe also "turning", and the hybrid's
-    /// hyphen is optional). `None` = not a kind word; the caller
-    /// refuses rather than guessing, because a typo'd declaration
-    /// that silently inferred would be the declaration law undone.
-    #[must_use]
-    pub fn from_word(w: &str) -> Option<Kind> {
-        let n: String = w
-            .chars()
-            .filter(|c| c.is_alphanumeric())
-            .flat_map(char::to_lowercase)
-            .collect();
-        match n.as_str() {
-            "mill" | "milling" => Some(Kind::Mill),
-            "lathe" | "turning" | "turn" => Some(Kind::Lathe),
-            "millturn" | "turnmill" | "millturning" | "turningmill" => Some(Kind::MillTurn),
-            _ => None,
-        }
-    }
-}
-
-/// The geometric tilt question (M5.1 stage A): can this machine lean
-/// its tool? `machine.rtcp`'s law, restated for the checker's parsed
-/// axes - true iff some rotary states a direction that is not the Z
-/// column (z² < 0.99·(x²+y²+z²)). A C table is not tilt; a trunnion
-/// or a tilting head is. An UNSTATED direction tilts nothing this
-/// app may verify against: capability must be claimed, never
-/// assumed.
-#[must_use]
-pub fn can_tilt(machine: &Machine) -> bool {
-    machine.axes.iter().any(|a| a.rotary && is_tilt_axis(a))
-}
-
-/// Is `a` a rotary whose stated direction LEANS (off the Z column)?
-fn is_tilt_axis(a: &AxisLimits) -> bool {
-    a.axis
-        .is_some_and(|d| d[2] * d[2] < 0.99 * (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]))
-}
-
-/// The machine's kind (M3.3 stage C): what the file DECLARES wins;
-/// a silent file falls to the axis-inventory law of M3.2 stage E
-/// (below), which the same files always produced. An unparseable
-/// declaration cannot arrive here - `parse_mch` refuses it at the
-/// front door and `is_sane` gates hand-edited project files - so by
-/// the time a Machine exists, a stated kind is a known word.
-///
-/// Rotary axes alone do not make a mill-turn: a turning center with
-/// a C axis still has no Y, and the file says "lathe". And (M5.1 A)
-/// a TILTING rotary makes no more a mill-turn than a table does:
-/// A and B heads and trunnions lean a milling cutter without ever
-/// spinning a part for turning. The turning question is the same
-/// geometry `can_tilt` answers, inverted - a rotary counts toward
-/// "turning" unless its stated direction says lean; unstated
-/// rotaries stay counted, the stage-E law for the files that
-/// predate the vectors.
-#[must_use]
-pub fn kind(machine: Option<&Machine>) -> Kind {
-    let Some(m) = machine else {
-        return Kind::Mill; // the unstated machine is today's document
-    };
-    if let Some(w) = &m.kind
-        && let Some(k) = Kind::from_word(w)
-    {
-        return k;
-    }
-    let has = |n: &str| m.axes.iter().any(|a| a.name.eq_ignore_ascii_case(n));
-    let stated = |a: &AxisLimits| {
-        a.rotary || ["A", "B", "C"].iter().any(|r| a.name.eq_ignore_ascii_case(r))
-    };
-    let turning = m.axes.iter().any(|a| stated(a) && !is_tilt_axis(a));
-    match (has("Y"), has("X"), has("Z"), turning) {
-        (true, _, _, true) => Kind::MillTurn,
-        (true, _, _, false) => Kind::Mill,
-        (false, true, true, _) => Kind::Lathe,
-        _ => Kind::Mill,
-    }
-}
-
 impl Machine {
     /// Is every stated limit statable: finite rates, and strokes that
     /// run somewhere. The project reader gates on this BEFORE writing
@@ -320,6 +227,21 @@ impl Machine {
     /// corrupt file, refused, never a checker that fails backwards.
     #[must_use]
     pub fn is_sane(&self) -> bool {
+        self.tooling_refusal(None).is_none() && self.limits_sane()
+    }
+
+    /// #828: why the stored `tooling` keys cannot be meant, as
+    /// `"key: rule"` (a default holder that no longer resolves in
+    /// `lookup`, the caller's holder library; one off the stated mount),
+    /// so a refusal names the key, not "a limit". With no lookup only
+    /// the words are judged ([`Self::is_sane`]); every app door that
+    /// stores a machine passes its library.
+    #[must_use]
+    pub fn tooling_refusal(&self, lookup: Option<super::HolderLookup>) -> Option<String> {
+        super::mount_check(self.spindle_mount.as_deref(), self.default_holder.as_deref(), lookup).err()
+    }
+
+    fn limits_sane(&self) -> bool {
         let rate_ok = |r: Option<f64>| r.is_none_or(|x| x.is_finite() && x > 0.0);
         rate_ok(self.spindle_min)
             && rate_ok(self.spindle_max)
@@ -333,9 +255,11 @@ impl Machine {
                 .as_deref()
                 .is_none_or(|w| Kind::from_word(w).is_some())
             && self.coolants.iter().all(|c| !c.name.is_empty())
+            && self.plasma_sane()
             && self.axes.iter().all(|a| {
                 rate_ok(a.feed) && rate_ok(a.rapid) && rate_ok(a.resolution) && a.travel.is_none_or(|(lo, hi)| lo.is_finite() && hi.is_finite() && hi > lo)
                     && a.axis.is_none_or(|d| d.iter().all(|x| x.is_finite()))
+                    && rate_ok(a.nose_to_axis)
             })
             && match (self.spindle_min, self.spindle_max) {
                 (Some(lo), Some(hi)) => hi >= lo,
@@ -355,12 +279,21 @@ impl Machine {
             .as_deref()
             .and_then(Kind::from_word)
             .map_or(String::new(), |k| format!("{} machine - ", k.label()));
+        // #669: a plasma table has a torch, not a spindle - "spindle ?-?"
+        // would read as an unstated range rather than an absent spindle.
+        let head = if kind(Some(self)) == Kind::Plasma {
+            "torch, no spindle".to_owned()
+        } else {
+            format!(
+                "spindle {}-{} rpm",
+                self.spindle_min.map_or_else(|| "?".into(), |x| format!("{x:.0}")),
+                self.spindle_max.map_or_else(|| "?".into(), |x| format!("{x:.0}")),
+            )
+        };
         let mut s = format!(
-            "{lead}{} {} - spindle {}-{} rpm, {} axes ({} with a known stroke)",
+            "{lead}{} {} - {head}, {} axes ({} with a known stroke)",
             self.vendor,
             self.model,
-            self.spindle_min.map_or_else(|| "?".into(), |x| format!("{x:.0}")),
-            self.spindle_max.map_or_else(|| "?".into(), |x| format!("{x:.0}")),
             self.axes.len(),
             n,
         );

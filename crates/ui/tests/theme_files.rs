@@ -57,8 +57,8 @@ fn the_shipped_example_parses() {
     assert_eq!(theme.tokens.glyph_px, 22.0);
     // Untouched fields keep the dark column's numbers.
     assert_eq!(theme.tokens.ink, Color32::from_rgb(0x23, 0x26, 0x2B));
-    assert_eq!(theme.tokens.cell_h, 35.0);
-    assert_eq!(theme.tokens.font_row_suffix, 10.5);
+    assert_eq!(theme.tokens.cell_h, Tokens::DARK.cell_h);
+    assert_eq!(theme.tokens.font_row_suffix, Tokens::DARK.font_row_suffix);
 }
 
 /// The ugly-but-legal law: a file can make the shell odd, never

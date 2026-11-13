@@ -192,6 +192,16 @@ impl ArcPiece {
         (self.p0, self.p1)
     }
 
+    /// Does the piece's solid span the world above its anchors up to
+    /// `z` (`Sweep::spans_above`, #637 E1)? The flank or shank reaches
+    /// `z` from the lowest anchor; a ball or taper piece is bounded.
+    pub(crate) fn spans_above(&self, z: f64) -> bool {
+        match &self.kind {
+            ArcKind::Ball { .. } | ArcKind::Rev(RevKind::Taper { .. }) => false,
+            _ => self.z0.min(self.z1) + self.tool_reach().1 >= z,
+        }
+    }
+
     /// The bounding radius of the tool about its anchor.
     fn extent(&self) -> f64 {
         let (lat, axial) = self.tool_reach();

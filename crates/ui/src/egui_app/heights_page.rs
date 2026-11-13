@@ -106,7 +106,7 @@ fn height_tag_is_bottom(tag: &str) -> bool {
 
 /// Where the read-only work-offset row points the user (#329).
 pub(crate) const SETUP_OFFSET_HINT: &str =
-    "program zero is the setup's WCS: its work offset word is set on the Setups page";
+    "program zero is the setup's WCS: its work offset (G54-G59) is set on the WCS page or the Setups page";
 
 /// The read-only work-offset row's text: the setup's resolved word, and
 /// where it is set.
@@ -160,4 +160,20 @@ fn height_rows(ui: &mut Ui, world: &flecs_ecs::prelude::World, setup: Option<&st
         ui.add(Label::new(RichText::new(echo).weak()).selectable(false));
         num(ui, u, &mut h.offset);
     });
+}
+
+#[cfg(test)]
+mod offset_hint_tests {
+    use super::SETUP_OFFSET_HINT;
+
+    /// #876: the hint names the two pages that really draw the work-offset
+    /// dropdown (the WCS page, #343, and the Setups page), and uses plain
+    /// words - no RS-274 "word" or "G-word" jargon.
+    #[test]
+    fn offset_hint_names_the_real_pages_in_plain_words() {
+        assert!(SETUP_OFFSET_HINT.contains("WCS page"), "{SETUP_OFFSET_HINT}");
+        assert!(SETUP_OFFSET_HINT.contains("Setups page"), "{SETUP_OFFSET_HINT}");
+        assert!(SETUP_OFFSET_HINT.contains("work offset (G54-G59)"), "{SETUP_OFFSET_HINT}");
+        assert!(!SETUP_OFFSET_HINT.contains("word"), "{SETUP_OFFSET_HINT}");
+    }
 }

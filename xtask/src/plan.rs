@@ -188,5 +188,12 @@ pub fn release(root: &Path) -> Plan {
         &["test", "-j", J, "-p", &p, "--lib", "--no-fail-fast", "--", T, "--ignored", "snapshot"],
         "ui",
     ));
+    // The docs-picture goldens (#525, #854) live in the gpu_render integration binary, which `--lib`
+    // above does not reach: run its `--ignored snapshot` test(s) here too.
+    plan.steps.push(Step::new(
+        "ui gpu_render snapshot lane (debug --ignored)",
+        &["test", "-j", J, "-p", &p, "--test", "gpu_render", "--no-fail-fast", "--", T, "--ignored", "snapshot"],
+        "ui",
+    ));
     plan
 }

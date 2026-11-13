@@ -103,18 +103,30 @@ pub(super) fn family_gate(world: &World, context: Option<&str>, params: &OpParam
     if info.admits(machine) {
         return Ok(());
     }
+    // #669: a plasma table cuts only the plasma family (#670); the
+    // refusal names the table's rule, not a mill to mount.
+    if machine == crate::machine::Kind::Plasma {
+        return Err(CommandError::Invalid(format!(
+            "a {} operation is {} work; the setup's machine is a plasma table, which cuts only plasma operations (a Plasma Profile)",
+            params.kind(),
+            family.work(),
+        )));
+    }
+    // #670: plasma work needs a plasma table - no mill or lathe (nor a
+    // mill-turn) strikes an arc.
+    if family == Family::Plasma {
+        return Err(CommandError::Invalid(format!(
+            "a {} operation is plasma cutting work; the setup's machine is a {} - mount a plasma table first",
+            params.kind(),
+            machine.word(),
+        )));
+    }
     Err(CommandError::Invalid(format!(
         "a {} operation is {} work; the setup's machine is a {} - mount a {} (or a mill-turn) first",
         params.kind(),
-        match family {
-            Family::Mill => "milling",
-            Family::Turn => "turning",
-        },
+        family.work(),
         machine.word(),
-        match family {
-            Family::Mill => "mill",
-            Family::Turn => "lathe",
-        }
+        family.machine(),
     )))
 }
 
@@ -134,7 +146,8 @@ pub(super) fn tool_gate(world: &World, params: &OpParams, tool: &str) -> Result<
 /// params or a source: ordering on resolved values (an op that would cut
 /// upward), then every From: Selection height resolving against the
 /// op's own source - an empty or vanished selection refuses by name
-/// here, never reaches a generator as a silent 0.
+/// here, never reaches a generator as a silent 0 - and a trochoidal
+/// microlift that would feed above the clearance plane (#774).
 pub(super) fn heights_gate(
     world: &World,
     setup: Option<&str>,
@@ -149,6 +162,9 @@ pub(super) fn heights_gate(
             "a {} operation must cut downward: its top height resolves below its bottom height (check the From references)",
             params.kind()
         )));
+    }
+    if let Some(why) = operation::microlift_sane(world, setup, Some(src), params) {
+        return Err(CommandError::Invalid(why));
     }
     Ok(())
 }

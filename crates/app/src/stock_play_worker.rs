@@ -39,7 +39,8 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use crate::clock::Instant;
+use std::time::Duration;
 
 use crate::stock_play::{FieldPlay, PlayIndex, PlaySeed};
 use crate::stock_view::{CutLayer, FieldView, Packed, PackedBase};

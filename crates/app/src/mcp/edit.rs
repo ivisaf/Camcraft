@@ -8,10 +8,10 @@
 
 use super::tools::{opt_str, req_str};
 use crate::commands::{
-    AddTool, CommandError, CreateOperation, DeleteOperation, EditOperationLinks, EditOperationParams, SetStock,
+    AddTool, CommandError, HolderPick, CreateOperation, DeleteOperation, EditOperationLinks, EditOperationParams, SetStock,
 };
 use crate::model;
-use crate::operation::{self, Height, HeightReference, KindInfo, OpParams, SrcRef};
+use crate::operation::{self, KindInfo, OpParams, SrcRef};
 use crate::project;
 use crate::script::{inventory, Env};
 use crate::stock::StockShape;
@@ -22,25 +22,11 @@ fn cmd_err(e: CommandError) -> String {
     e.to_string()
 }
 
-/// The draft every new operation is seeded from: a facing pass in
-/// references (25 above the stock top, skimming the top), carried into
-/// the kind through the registry's retype law - the same seed shape the
-/// app's quick-add uses, so an agent's new op and a clicked one agree.
+/// The draft every new operation is seeded from - the app's shared seed
+/// (`operation::seed_params`, #511), so an agent's new op and a clicked
+/// one agree.
 pub(super) fn seed(kind: usize) -> OpParams {
-    let base = OpParams::Face {
-        holes: Default::default(),
-        tilt: None,
-        stepover: 3.0,
-        clearance_z: Height::of(HeightReference::TopOfStock, 25.0),
-        cut_z: Height::of(HeightReference::TopOfStock, 0.0),
-        top_z: None,
-        stepdown: None,
-        feed: 1200.0,
-        plunge_feed: 300.0,
-        climb: true,
-        blend_turns: false,
-    };
-    operation::retype_params(&base, kind)
+    operation::seed_params(kind)
 }
 
 /// A kind by its label ("Pocket", any case) or its file key ("pocket").
@@ -161,9 +147,23 @@ pub(super) fn add_tool(env: &mut Env, a: &Map<String, Value>) -> Result<Value, S
         Some(n) => n.to_owned(),
         None => default_name.ok_or("\"name\" is required with a definition")?,
     };
-    let cmd = AddTool::new(&env.world, &name, tool).map_err(cmd_err)?;
+    // #828: a stated holder wins ("none" adds it bare); unstated, the
+    // tool starts with the active setup's machine's default holder.
+    let (pick, from) = match opt_str(a, "holder")? {
+        None => (HolderPick::MachineDefault, "machine default"),
+        Some(h) if h.trim().eq_ignore_ascii_case("none") => (HolderPick::Bare, "stated"),
+        Some(h) => (HolderPick::Named(h.to_owned()), "stated"),
+    };
+    let cmd = AddTool::with_holder(&env.world, &name, tool, pick).map_err(cmd_err)?;
+    let holder = cmd.holder().map(str::to_owned);
+    let note = cmd.note();
     env.history.execute(&env.world, cmd);
-    Ok(json!({ "tool": name }))
+    Ok(json!({
+        "tool": name,
+        "holder": holder,
+        "holder_from": holder.as_ref().map(|_| from),
+        "note": note,
+    }))
 }
 
 pub(super) fn set_stock(env: &mut Env, a: &Map<String, Value>) -> Result<Value, String> {

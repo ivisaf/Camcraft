@@ -976,3 +976,78 @@ fn finish3d_project_dome() {
     .unwrap();
     write_golden("finish3d_project_dome.cl", &gen_to_cltext(&t));
 }
+
+/// #670: a plasma plate - a 120x80 outline with a Ø40 hole holding a
+/// 12x12 island part, a Ø10 small hole and a 30x10 slot - cut with a
+/// 1.5 mm kerf in the computer: the torch records (kerf, spans, roles,
+/// parents) pinned with the moves (the `; PLASMA` / `; TORCH` lines,
+/// docs/CNC-INTERMEDIATE.md), the island before its hole, every hole
+/// before the outline, the small hole by the Primer's rule.
+#[test]
+fn plasma_plate_with_holes_matches_golden() {
+    use camcraft_app::plasma::{plasma_profile, PlasmaParams};
+    let loops = vec![
+        rect(0.0, 0.0, 120.0, 80.0).loops()[0].clone(),
+        circle(Point2::new(35.0, 40.0), 20.0, 64),
+        rect(29.0, 34.0, 41.0, 46.0).loops()[0].clone(),
+        circle(Point2::new(80.0, 60.0), 5.0, 32),
+        rect(70.0, 15.0, 100.0, 25.0).loops()[0].clone(),
+    ];
+    let part = Region::new(loops.clone()).unwrap();
+    let p = PlasmaParams {
+        kerf: 1.5,
+        control_comp: false,
+        reversed: false,
+        lead_in: 4.0,
+        lead_out: 3.0,
+        small_hole_dia: 32.0,
+        small_hole_feed: 0.65,
+        overburn: 1.5,
+        thickness: 6.0,
+        feed: Some(2500.0),
+        clearance_z: 15.0,
+        cut_z: 6.0,
+        pierce_height: Some(3.8),
+        cut_height: None,
+        pierce_delay: Some(0.5),
+    };
+    let path = plasma_profile(&loops, &[], &part, &p).unwrap();
+    let text = gen_to_cltext(&path);
+    // The in-app writer and the golden writer agree byte for byte.
+    assert_eq!(camcraft_app::cl::text::to_text(&path).unwrap(), text);
+    assert_eq!(camcraft_app::cl::text::from_text(&text).unwrap().plasma, path.plasma);
+    // The superset law: the post's stream reader takes it - the `; PLASMA`
+    // / `; TORCH` lines read as its plasma records (#671, plasma_post.rs).
+    let recs = camcraft_app::post::cnc::parse(&text).unwrap();
+    assert!(recs.iter().any(|r| matches!(r, camcraft_app::post::cnc::Record::Plasma(_))));
+    write_golden("plasma_plate_with_holes.cl", &text);
+}
+
+#[test]
+fn trochoid_slot_small_matches_golden() {
+    // #220: a D6 in a 10 mm channel, 12 mm long, one level - the bore
+    // helix, the front arcs with their wall leads and fillets, the
+    // microlift retraces and the cap pencil, every arc an arc.
+    let p = camcraft_app::machining2d::TrochoidParams {
+        tool_diameter: 6.0,
+        width: 10.0,
+        loop_width: None,
+        step: 1.5,
+        max_engagement: 90.0,
+        ret: camcraft_app::machining2d::TrochoidReturn::Microlift { height: 0.3 },
+        smoothing: 0.5,
+        stock_to_leave: 0.0,
+        clearance_z: 5.0,
+        retract_z: Some(1.0),
+        top_z: -2.0,
+        bottom_z: -2.0,
+        stepdown: 2.0,
+        feed: 800.0,
+        return_feed: 2000.0,
+        plunge_feed: 200.0,
+        climb: true,
+    };
+    let t = camcraft_app::machining2d::trochoidal_slot(&[Point2::new(0.0, 0.0), Point2::new(12.0, 0.0)], &p).unwrap();
+    assert!(t.has_arcs());
+    write_golden("trochoid_slot_small.cl", &gen_to_cltext(&t));
+}

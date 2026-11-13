@@ -180,6 +180,21 @@ pub fn depth_sane(
     }
 }
 
+/// The microlift door (#774): a trochoidal slot's lifted return must
+/// not rise above the clearance plane, read on the resolved heights
+/// ([`OpParams::microlift_refusal`] holds the rule). An unresolved
+/// height is refused elsewhere, by name.
+#[must_use]
+pub fn microlift_sane(
+    world: &World,
+    setup: Option<&str>,
+    src: Option<&SrcRef>,
+    params: &OpParams,
+) -> Option<String> {
+    let r = resolve_params(world, setup, src, params).ok()?;
+    params.microlift_refusal(r.clearance, r.top?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

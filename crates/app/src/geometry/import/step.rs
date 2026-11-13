@@ -24,8 +24,20 @@ use truck_stepio::r#in::Table;
 use super::{ImportError, MAX_FACETS};
 use crate::geometry::{Mesh, Point3, Triangle};
 
-/// Lower bound for tessellation tolerance; truck asserts tol >= 1e-7.
-const MIN_TOL: f64 = 1e-6;
+/// Lower bound for tessellation tolerance, in the FILE's length unit
+/// (the unit truck meshes in): ten times truck's own `TOLERANCE` (1e-6,
+/// also in model units), which it welds vertices at. Meshing within a
+/// few of those split the metre-unit AP214 sample into a non-manifold
+/// body (at 5e-6 m, #689); 1e-5 keeps it whole. For a millimetre or inch
+/// file it never binds; a metre file stops at 1e-5 m = 0.01 mm, short of
+/// the 0.005 mm cap, and the import logs it as reduced fidelity.
+const MIN_TOL: f64 = 1e-5;
+/// The coarsest chord tolerance a STEP mesh is made at, in MILLIMETRES:
+/// half the program sim's verdict tolerance, so the facets' sagitta on a
+/// curved wall stays inside what the gouge verdict already forgives
+/// (#689). The mesh is made in the file's unit and scaled to mm after,
+/// so `shell_facets` divides this by the file's mm-per-unit.
+const MAX_CHORD: f64 = crate::stock_sim::DEV_TOL * 0.5;
 
 pub fn parse(data: &[u8]) -> Result<Mesh, ImportError> {
     if data.is_empty() {
@@ -61,7 +73,7 @@ pub fn parse(data: &[u8]) -> Result<Mesh, ImportError> {
         // AssertUnwindSafe holds for our purposes: on a panic we discard all
         // outputs and abort the import.
         let per_shell = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            shell_facets(&table, shell, budget)
+            shell_facets(&table, shell, budget, mm_per_unit.unwrap_or(1.0))
         }));
         let tris = match per_shell {
             Err(_) => {
@@ -91,11 +103,14 @@ pub fn parse(data: &[u8]) -> Result<Mesh, ImportError> {
 }
 
 /// Tessellate one STEP shell into triangles, staying inside `budget` facets.
+/// The triangles are in the file's length unit; `mm_per_unit` (millimetres
+/// in one of them) only converts the mm chord cap into that unit.
 /// Runs inside `catch_unwind`; returns `Err` only for reasons we control.
 fn shell_facets(
     table: &Table,
     shell: &truck_stepio::r#in::ShellHolder,
     budget: usize,
+    mm_per_unit: f64,
 ) -> Result<Vec<Triangle>, ImportError> {
     let cshell = table
         .to_compressed_shell(shell)
@@ -147,8 +162,31 @@ fn shell_facets(
         Ok(facets)
     };
     // Quality target: ~0.1% of the model extent, floored so tiny parts still
-    // subdivide and truck's assert (tol >= 1e-7) holds.
-    let tol_target = (extent * 1e-3).max(MIN_TOL);
+    // subdivide and truck's assert (tol >= 1e-7) holds - and never coarser
+    // than half the program gate's verdict tolerance (#689). The sim judges
+    // the program against these facets, and on a concave wall a chord
+    // stands inside the true surface by its sagitta: a mesh coarser than
+    // the verdict charged a bore at the hole's own size as a gouge the
+    // wall's full height. Half the verdict leaves the other half for the
+    // cut itself, so a nominal finish passes and 0.05 mm into the wall is
+    // still a gouge. The facet budget below still bounds the mesh.
+    //
+    // Units: `extent`, `tol` and `tol_target` are in the FILE's length unit
+    // (truck meshes there; `parse` scales to mm after). `extent * 1e-3` is
+    // relative, so it needs no conversion; the mm cap does - an inch file
+    // capped at a bare 0.005 got 0.005 in = 0.127 mm chords (#689).
+    // `mm_per_unit` comes from step_units, which reads only positive
+    // finite units; anything else falls back to millimetres.
+    let k = if mm_per_unit.is_finite() && mm_per_unit > 0.0 { mm_per_unit } else { 1.0 };
+    let max_chord = MAX_CHORD / k;
+    // `wanted` is the target before truck's floor: a unit so large that
+    // 0.005 mm is under MIN_TOL of it (the kilometre: 5e-9 km) can't be
+    // meshed that fine, and the log below says so instead of passing.
+    let wanted = (extent * 1e-3).min(max_chord);
+    // min/max, not clamp: a NaN extent then lands on a finite target
+    // instead of carrying NaN into truck's tolerance assert.
+    #[allow(clippy::manual_clamp)]
+    let tol_target = wanted.max(MIN_TOL);
     // Start 250x coarser than the target - the first pass then costs a few
     // dozen triangles per face no matter how big the model, so no shell can
     // silently allocate a monster mesh before we have measured it.
@@ -185,9 +223,11 @@ fn shell_facets(
             Err(err) => return Err(err),
         }
     }
-    if tol > tol_target {
+    if tol > wanted {
         eprintln!(
-            "step: tessellated at reduced fidelity (tol {tol:e}, target {tol_target:e}, {} facets) to bound memory",
+            "step: tessellated at reduced fidelity (tol {:e} mm, target {:e} mm, {} facets) - bounded by memory or by the kernel's least tolerance",
+            tol * k,
+            wanted * k,
             refined.len()
         );
     }

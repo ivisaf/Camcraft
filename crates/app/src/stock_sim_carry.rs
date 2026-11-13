@@ -115,7 +115,15 @@ pub(crate) fn carry_turn(world: &flecs_ecs::prelude::World, from: &str, to: &str
         return Err(format!("{head}: {CARRY_MACHINE_REFUSAL}"));
     }
     let t = crate::setup_relative::transform_between(world, from, to).map_err(|e| format!("{head}: {e}"))?;
-    LatticeTurn::from_matrix(matrix_of(t.rot), [t.pos.x, t.pos.y, t.pos.z]).map_err(|e| format!("{head}: {e}"))
+    LatticeTurn::from_matrix(matrix_of(t.rot), [t.pos.x, t.pos.y, t.pos.z]).map_err(|e| {
+        if e == crate::stock_sim::CARRY_TURN_REFUSAL {
+            // #866: say WHICH turn, in the words the alignment row uses.
+            let [x, y, z] = crate::setup_align::angles_of(Some(t));
+            format!("{head}: '{to}' holds the part turned X {x}°, Y {y}°, Z {z}° from how '{from}' holds it, and {e}")
+        } else {
+            format!("{head}: {e}")
+        }
+    })
 }
 
 /// Decide how the program enters setup `to` from setup `from`, by the

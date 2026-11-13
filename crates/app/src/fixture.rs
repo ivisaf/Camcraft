@@ -138,16 +138,21 @@ pub fn table_of(m: &machine::Machine) -> Option<FixtureBox> {
 /// [`crate::verify::VerifyContext::fixtures`].
 #[must_use]
 pub fn boxes_for(world: &World, declared: Option<&str>) -> Vec<FixtureBox> {
-    let mut out: Vec<FixtureBox> = tagged(world, declared)
+    named_boxes_for(world, declared).into_iter().map(|(_, b)| b).collect()
+}
+
+/// [`boxes_for`] with each box's name beside it, in the same order: the
+/// tagged model's name, then [`MACHINE_TABLE`] for the derived table.
+/// The link planner (#339 slice 5) names the steel a link cannot clear.
+#[must_use]
+pub fn named_boxes_for(world: &World, declared: Option<&str>) -> Vec<(String, FixtureBox)> {
+    let mut out: Vec<(String, FixtureBox)> = tagged(world, declared)
         .into_iter()
-        .filter_map(|(_, e)| {
-            model::entity_world_aabb(world, &e).map(|b| FixtureBox {
-                min: b.min,
-                max: b.max,
-            })
+        .filter_map(|(name, e)| {
+            model::entity_world_aabb(world, &e).map(|b| (name, FixtureBox { min: b.min, max: b.max }))
         })
         .collect();
-    out.extend(table_box(world, declared));
+    out.extend(table_box(world, declared).map(|b| (MACHINE_TABLE.to_string(), b)));
     out
 }
 

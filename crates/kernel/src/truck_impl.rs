@@ -1,7 +1,8 @@
 //! The truck reference impl of the kernel seam (feature `truck`, bench only):
 //! sweep-built primitives, booleans via truck-shapeops `and` / `or` (subtract
 //! is `and` with the tool inverted), measure via truck-meshalgo tessellation.
-//! truck has no solid offset and no edge blend: both are `Unsupported`.
+//! truck has no solid offset, no edge blend and no B-rep healing: all three
+//! are `Unsupported`.
 //! Provenance: calls truck's public API as shown in its published examples
 //! (truck-shapeops `punched-cube-shapeops`, truck-meshalgo rustdoc); no truck
 //! internals reimplemented.
@@ -133,6 +134,13 @@ impl Kernel for TruckKernel {
         Err(KernelError::Unsupported {
             kernel: NAME,
             op: "blend_edges",
+        })
+    }
+
+    fn heal(&mut self, _s: Solid) -> Result<Solid, KernelError> {
+        Err(KernelError::Unsupported {
+            kernel: NAME,
+            op: "heal",
         })
     }
 

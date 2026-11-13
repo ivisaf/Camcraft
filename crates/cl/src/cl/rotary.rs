@@ -36,7 +36,7 @@ use super::{Move, Toolpath};
 
 /// Below this radius (mm) a point stands on the spindle line: it has
 /// no azimuth, and the move keeps the previous C.
-const ON_LINE: f64 = 1e-6;
+pub(super) const ON_LINE: f64 = 1e-6;
 /// How far a stamped pose may sit off the radial station (unit-vector
 /// component, ~0.06 deg).
 const STATION_TOL: f64 = 1e-3;
@@ -46,7 +46,7 @@ const MAX_DEPTH: u32 = 12;
 
 /// The tip's azimuth about the Z line through `center`, degrees, or
 /// None on the line itself.
-fn azimuth(p: Point3, center: [f64; 2]) -> Option<f64> {
+pub(super) fn azimuth(p: Point3, center: [f64; 2]) -> Option<f64> {
     let (dx, dy) = (p.x - center[0], p.y - center[1]);
     (dx.hypot(dy) > ON_LINE).then(|| dy.atan2(dx).to_degrees())
 }

@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use camcraft_app::commands::{
-    CommandError, DeleteEntity, History, ImportModel, SetStock, SetTheme, SetUnits, SetWcsOrigin,
-    UpdateModel, theme_of,
+    CommandError, DeleteEntity, History, ImportModel, SetStock, SetUnits, SetWcsOrigin,
+    UpdateModel,
 };
 use camcraft_app::units::{self, Unit};
 use camcraft_app::geometry::{cube, Mesh, Point3, Triangle};
@@ -807,13 +807,14 @@ fn moving_one_part_carries_existing_stock_and_undo_restores_both() {
         rot: quat_from_euler(0.0, 0.0, FRAC_PI_2),
     };
     history.execute(&world, MoveModel::new(&world, "part", part_after).expect("move"));
+    // #571: the square box stock follows the turned part but stays square
+    // to the machine, re-fitted with the allowance it had on each side
+    // (-X 0, +X 3, -Y 2, +Y 2, under 0, top 1): part x 9..10, y 0..1.
     let stock = model::find_by_name(&world, STOCK_NAME).expect("stock remains");
     let moved = model::transform_of(&world, &stock).expect("placement");
-    assert!((moved.pos.x - 10.0).abs() < 1e-12);
-    assert!((moved.pos.y - 2.0).abs() < 1e-12);
-    for (actual, expected) in moved.rot.iter().zip(part_after.rot) {
-        assert!((*actual - expected).abs() < 1e-12);
-    }
+    assert!((moved.pos.x - 11.0).abs() < 1e-9 && moved.pos.y.abs() < 1e-9 && moved.pos.z.abs() < 1e-9, "{:?}", moved.pos);
+    assert_eq!(moved.rot, stock_before.rot, "the block keeps its orientation");
+    assert_eq!(model::stock_def_of(&world, &stock), Some(StockShape::Box { dx: 4.0, dy: 4.0, dz: 2.0 }));
 
     assert!(history.undo(&world));
     assert_eq!(model::transform_of(&world, &stock), Some(stock_before));
@@ -937,98 +938,4 @@ fn move_model_refuses_other_furniture_and_garbage() {
         Err(CommandError::Invalid(m)) if m.contains("work offset")
     ));
 
-}
-
-// M6.1 C: the theme choice is a command like every other piece of
-// setup furniture - SelectPost's twin. The law lives at command
-// construction (a stranger name or a missing file refuses by name,
-// re-selecting what is already worn is not a change); the parse lives
-// surface-side, so the File arm's law here is existence only.
-#[test]
-fn theme_choice_undoes_redoes_and_refuses() {
-    use camcraft_app::schema::ThemeRef;
-
-    let world = new_world();
-    let mut history = History::default();
-    // A fresh world has never been themed: the default wears itself.
-    assert_eq!(theme_of(&world), ThemeRef::Dark);
-
-    // Selecting the theme it already wears is not a change - no
-    // command, nothing on the stack.
-    assert!(matches!(
-        SetTheme::new(&world, ThemeRef::Dark),
-        Err(CommandError::Invalid(m)) if m.contains("already selected")
-    ));
-
-    // A named theme that is not a built-in refuses by name.
-    assert!(matches!(
-        SetTheme::new(&world, ThemeRef::Named("solarpunk".into())),
-        Err(CommandError::Invalid(m)) if m.contains("solarpunk")
-    ));
-
-    // A file that is not there refuses, naming the path.
-    let missing = std::env::temp_dir().join(format!("camcraft-gone-{}.json", std::process::id()));
-    let _ = std::fs::remove_file(&missing);
-    assert!(matches!(
-        SetTheme::new(&world, ThemeRef::File(missing.display().to_string())),
-        Err(CommandError::Invalid(m)) if m.contains("camcraft-gone")
-    ));
-
-    // The real choice: dark -> light, undo -> dark, redo -> light.
-    history.execute(&world, SetTheme::new(&world, ThemeRef::Named("light".into())).expect("light"));
-    assert_eq!(theme_of(&world), ThemeRef::Named("light".into()));
-    assert!(history.undo(&world));
-    assert_eq!(theme_of(&world), ThemeRef::Dark);
-    assert!(history.redo(&world));
-    assert_eq!(theme_of(&world), ThemeRef::Named("light".into()));
-
-    // A theme file's existence is all the app seam checks - a real
-    // file lands whatever its contents (parsing is the shell's
-    // pre-step; the ui tests carry that half of the law).
-    let file = std::env::temp_dir().join(format!("camcraft-theme-{}.json", std::process::id()));
-    std::fs::write(&file, "{}").expect("temp theme file");
-    history.execute(&world, SetTheme::new(&world, ThemeRef::File(file.display().to_string())).expect("file theme"));
-    assert_eq!(theme_of(&world), ThemeRef::File(file.display().to_string()));
-    assert!(history.undo(&world));
-    assert_eq!(theme_of(&world), ThemeRef::Named("light".into()));
-    let _ = std::fs::remove_file(&file);
-}
-
-/// M13.4: the colour-vision remap is `SetTheme`'s twin - a command on
-/// the world singleton, undoable, refusing a no-op; default Off; and a
-/// VIEW preference the project file never carries (saving a remapped
-/// world and opening it elsewhere lands Off; opening a document over
-/// a remapped world leaves the viewer's mode as it was).
-#[test]
-fn color_vision_is_an_undoable_view_preference() {
-    use camcraft_app::commands::{color_vision_of, SetColorVision};
-    use camcraft_app::schema::ColorVision;
-
-    let world = new_world();
-    let mut history = History::default();
-    assert_eq!(color_vision_of(&world), ColorVision::Off, "a fresh world is not remapped");
-    assert!(matches!(
-        SetColorVision::new(&world, ColorVision::Off),
-        Err(CommandError::Invalid(m)) if m.contains("already selected")
-    ));
-    for mode in [ColorVision::Protan, ColorVision::Deutan, ColorVision::Tritan] {
-        let prev = color_vision_of(&world);
-        history.execute(&world, SetColorVision::new(&world, mode).expect("a real mode"));
-        assert_eq!(color_vision_of(&world), mode);
-        assert!(history.undo(&world));
-        assert_eq!(color_vision_of(&world), prev, "undo puts the previous mode back");
-        assert!(history.redo(&world));
-        assert_eq!(color_vision_of(&world), mode);
-    }
-
-    let path = std::env::temp_dir().join(format!("camcraft-cvd-{}.json", std::process::id()));
-    camcraft_app::project::save(&world, &path).expect("save");
-    let text = std::fs::read_to_string(&path).expect("read back");
-    assert!(!text.to_lowercase().contains("vision"), "the project file never carries it");
-    let elsewhere = new_world();
-    camcraft_app::project::load(&elsewhere, &path).expect("open elsewhere");
-    assert_eq!(color_vision_of(&elsewhere), ColorVision::Off, "a colleague's screen is not remapped");
-    camcraft_app::project::load(&world, &path).expect("re-open here");
-    assert_eq!(color_vision_of(&world), ColorVision::Tritan, "the viewer's mode outlives the document");
-    let _ = std::fs::remove_file(&path);
 }

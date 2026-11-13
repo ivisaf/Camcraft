@@ -85,11 +85,11 @@ fn off_is_the_house_look_exactly() {
     assert_eq!(color_vision_of(&State::new().world), ColorVision::Off);
 }
 
-/// The pick is a command: queued, gated, executed onto the history;
-/// undo and redo walk it; re-picking the live mode is refused and
-/// pushes nothing.
+/// The pick is queued and gated, then worn; since #877 it is the
+/// user's preference, so it is not on the history: undo leaves it, and
+/// re-picking the live mode changes nothing.
 #[test]
-fn switching_is_a_command_with_undo() {
+fn switching_is_a_preference_outside_undo() {
     let mut state = State::new();
     let run = |state: &mut State, k: CommandKind| {
         state.pending.push_back(k);
@@ -101,15 +101,11 @@ fn switching_is_a_command_with_undo() {
     run(&mut state, CommandKind::SelectColorVision(ColorVision::Tritan));
     assert_eq!(color_vision_of(&state.world), ColorVision::Tritan);
     run(&mut state, CommandKind::Undo);
-    assert_eq!(color_vision_of(&state.world), ColorVision::Protan);
-    run(&mut state, CommandKind::Undo);
+    assert_eq!(color_vision_of(&state.world), ColorVision::Tritan, "undo leaves the mode");
+    run(&mut state, CommandKind::SelectColorVision(ColorVision::Tritan));
+    assert_eq!(color_vision_of(&state.world), ColorVision::Tritan, "a re-pick changes nothing");
+    run(&mut state, CommandKind::SelectColorVision(ColorVision::Off));
     assert_eq!(color_vision_of(&state.world), ColorVision::Off);
-    run(&mut state, CommandKind::Redo);
-    assert_eq!(color_vision_of(&state.world), ColorVision::Protan);
-    run(&mut state, CommandKind::SelectColorVision(ColorVision::Protan));
-    assert_eq!(color_vision_of(&state.world), ColorVision::Protan);
-    run(&mut state, CommandKind::Undo);
-    assert_eq!(color_vision_of(&state.world), ColorVision::Off, "the refused re-pick pushed nothing");
 }
 
 fn rgb(c: egui::Color32) -> [f64; 3] {

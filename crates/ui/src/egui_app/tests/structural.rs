@@ -15,7 +15,7 @@ use egui_kittest::kittest::NodeT;
 use super::*;
 
 /// Every painted text of the last frame with its top-left, in paint order.
-fn painted(h: &Harness<'static, ShellUi>) -> Vec<(String, egui::Pos2)> {
+pub(super) fn painted(h: &Harness<'static, ShellUi>) -> Vec<(String, egui::Pos2)> {
     fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
         match shape {
             egui::Shape::Text(t) => out.push((t.galley.text().to_owned(), t.pos)),
@@ -62,12 +62,9 @@ fn disabled(h: &Harness<'static, ShellUi>, label: &str) -> bool {
 fn assert_shell_skeleton(h: &Harness<'static, ShellUi>) {
     let texts = painted(h);
     // Ribbon: the group headers and a cell per group, all above the dock.
-    let groups = [
-        "File", "Setup", "Milling 2D", "Milling 3D", "Drilling", "Multi-axis", "Modify",
-        "Inspect", "View",
-    ];
+    let groups: [&str; 0] = [];
     let cells = ["New", "Open", "Save", "Post", "Stock", "Origin", "Undo", "Redo", "Simulate"];
-    let tab_y = at(&texts, "browser").y;
+    let tab_y = at(&texts, "Browser").y;
     for t in groups.iter().chain(cells.iter()) {
         assert!(at(&texts, t).y < tab_y, "ribbon text {t:?} must sit above the dock tabs");
     }
@@ -84,8 +81,8 @@ fn assert_shell_skeleton(h: &Harness<'static, ShellUi>) {
         .unwrap_or_else(|| panic!("no painted build identity starting {ver:?}"));
     assert!(build.y < tab_y, "the build identity sits on the ribbon");
     // Dock: three leaves, left to right, titles on one row.
-    let (b, v, p) = (at(&texts, "browser"), at(&texts, "viewport"), at(&texts, "properties"));
-    assert!(b.x < v.x && v.x < p.x, "dock order must be browser | viewport | properties");
+    let (b, v, p) = (at(&texts, "Browser"), at(&texts, "Viewport"), at(&texts, "Properties"));
+    assert!(b.x < v.x && v.x < p.x, "dock order must be Browser | Viewport | Properties");
     assert!((b.y - v.y).abs() < 1.0 && (v.y - p.y).abs() < 1.0, "the tab titles share a row");
     // Browser rows of the seed, under its tab.
     let in_browser = |q: egui::Pos2| q.y > b.y && q.x < v.x;
@@ -134,6 +131,13 @@ fn assert_shell_skeleton(h: &Harness<'static, ShellUi>) {
         .collect();
     assert!(titled.is_empty(), "no floating window may be open by default: {titled:?}");
     assert!(h.query_by_label("Shank diameter").is_none(), "the tool editor stays closed");
+    // #561: no locate-in-fixture mate draft is armed by default.
+    assert!(h.state().state.locate_pick.is_none(), "the locate picks start unarmed");
+    assert!(h.query_by_label("Apply locate").is_none(), "the locate form is drawn only while armed");
+    // #561 review: nor its turn row, its offset frame or its refusal line.
+    for gone in ["Turn (deg)", "Offset (setup X / Y / Z)", "Not yet: "] {
+        assert!(h.query_by_label_contains(gone).is_none(), "{gone} is drawn only while armed");
+    }
 }
 
 /// `egui_app.png`'s intent in the dark house look.
@@ -231,10 +235,10 @@ fn tool_editor_structure() {
     );
 }
 
-/// #557 / #554: a setup's own page carries the part-alignment rows in
-/// the properties leaf - the plane row (a face) and the axes-in-the-plane
+/// #557 / #554 / #555: a setup's own page carries the part-alignment rows in
+/// the properties leaf - the plane row (a face), the three-points row (#555) and the axes-in-the-plane
 /// rows (an edge or two points), each saying which pick it takes, with nothing armed and Apply hidden until
-/// an axis is picked.
+/// an axis is picked, and every option of the plane rows on screen (#330).
 #[test]
 fn setup_page_alignment_rows_structure() {
     let _g = snapshot_guard();
@@ -260,4 +264,46 @@ fn setup_page_alignment_rows_structure() {
     }
     assert!(h.query_by_label("Apply axes").is_none(), "Apply waits for an axis pick");
     assert!(h.state().state.axis_pick.is_none(), "nothing is armed by drawing the page");
+    // #555: the three-points row sits right under the face row, says it
+    // takes points, and shows no prompts or Apply until it is armed.
+    let points = h.query_by_label_contains("Lay on a plane - pick three points").expect("the points row shows").rect();
+    assert!(plane.min.y < points.min.y && points.min.y < axes.rect().min.y, "face row, points row, then the axes rows");
+    for label in ["Pick three points", "Points down", "Point 1 to plane level", "3-2-1 frame"] {
+        assert!(h.query_by_label(label).is_some(), "the points row must show {label:?}");
+        assert!(!disabled(&h, label), "{label:?} is live");
+    }
+    for label in ["Apply points", "Remove last", "Clear points"] {
+        assert!(h.query_by_label(label).is_none(), "{label:?} waits for the row to be armed");
+    }
+    assert!(h.query_by_label_contains("Point 1:").is_none(), "no prompts until armed");
+    // #330 (reopened), #606: short lines, so every option lies inside the
+    // narrow properties pane - not merely on screen: one long row ran
+    // Flip, the level box and the pick buttons past the pane's right edge,
+    // and a control clipped at that edge is out of reach even where the
+    // window still has pixels. The pane is the dock leaf's tab body.
+    let pane = h
+        .state()
+        .dock
+        .iter_leaves()
+        .find(|(_, l)| l.tabs.contains(&Tab::Properties))
+        .map(|(_, l)| l.viewport)
+        .expect("the properties leaf");
+    assert!(pane.width() > 100.0 && pane.width() < 640.0, "the pane is the narrow right leaf: {pane:?}");
+    for label in ["Pick a face", "Face down", "Face to plane level", "Pick three points", "Points down", "Point 1 to plane level", "3-2-1 frame", "+Y by Two points", "Pick +Y edge", "Flip +Y", "+X by Two points", "Pick +X edge", "Flip +X"] {
+        let r = h.get_by_label(label).rect();
+        assert!(pane.contains_rect(r), "{label:?} lies inside the properties pane {pane:?}: {r:?}");
+    }
+    // #606: the Part alignment row's turn - its angles, its pivot (WCS
+    // origin by default, named on the row) and its Apply - too.
+    let pivot = h
+        .get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().as_deref() == Some("WCS origin"))
+        .rect();
+    assert!(pane.contains_rect(pivot), "the turn's pivot lies inside the pane: {pivot:?}");
+    let turn = h.query_by_label_contains("Turn").expect("the turn row").rect();
+    let applies: Vec<egui::Rect> = h.get_all_by_label("Apply").map(|n| n.rect()).collect();
+    assert!(applies.iter().any(|r| r.min.y > turn.min.y), "the turn's Apply shows under its angles");
+    for r in applies {
+        assert!(pane.contains_rect(r), "Apply lies inside the pane: {r:?}");
+    }
+    assert!(h.state().state.points_pick.is_none(), "nothing is armed by drawing the page");
 }

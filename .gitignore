@@ -10,6 +10,9 @@
 # --- generated / local tooling ------------------------------------------
 /graphify-out
 /gate-logs
+# docs site (#688): zola's output and the version file the release job writes
+/site/public/
+/site/version.toml
 *.log
 # UI snapshot test outputs (the blessed goldens live in crates/ui/tests/snapshots)
 *.new.png

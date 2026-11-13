@@ -147,8 +147,8 @@ impl Planner<'_> {
         let mut overloaded = false;
         let mut grown = false;
         for rev_k in 0..MAX_REVS {
-            if self.work.get() > budget::WORK_MAX * s.r {
-                self.refused = Some(budget::over_work(rev_k));
+            if let Some(why) = self.work.over(s.r, rev_k) {
+                self.refused = Some(why);
                 return Ok(Grown::Refused);
             }
             let disc = a < levels[0] - 1e-9;
@@ -167,6 +167,7 @@ impl Planner<'_> {
                 eps - GAP.min(TAIL * (eps - 0.5 * RESERVE))
             };
             let d_eps = d0.offset_fine(-eps_n, ARC_TOL)?;
+            self.work.add_geometry(&[&d_eps]);
             let rho_k = levels[lvl];
             // This level is whole when the cleared area is all of the
             // margin's area the level's fillet reaches from the seed.
@@ -178,13 +179,14 @@ impl Planner<'_> {
                 } else {
                     open(&reg.offset_fine(g, ARC_TOL)?.intersect(&d_eps)?, rho_k)?
                 };
+                p.work.add_geometry(&[&reg, &y]);
                 let Some((yr, b)) = piece(&y, s.seed, s.climb)? else { return Ok(None) };
                 let done = !disc && whole - yr.area() < 1e-4 * whole.max(1.0);
                 // Landed on the ring tangentially (`LAND`): the seam
                 // turns by the ring's chord angle, whatever the next
                 // revolution's step.
                 let (rev, b) = morph_rev(&ring, &b, LAND);
-                p.work.set(p.work.get() + super::front::len(&rev));
+                p.work.add_len(super::front::len(&rev));
                 let mut ras = p.ras.clone();
                 let w = ras.walk_until(&rev, (s.r, p.rim, p.step), limit);
                 Ok(Some((g, yr, b, rev, ras, w, done)))
@@ -247,6 +249,15 @@ impl Planner<'_> {
         }
         self.note_corners(&d0, rho_c);
         Ok(Grown::Done)
+    }
+
+    /// Append a run to the walk, dropping a repeat of the joint.
+    pub(super) fn push_walk(&mut self, run: &[Point2]) {
+        for &p in run {
+            if self.walk.last().is_none_or(|&l| super::front::dist(l, p) > 1e-6) {
+                self.walk.push(p);
+            }
+        }
     }
 
     /// Walk `run` on the stock whole and keep it.

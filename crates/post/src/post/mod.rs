@@ -29,6 +29,7 @@
 mod after_op;
 pub mod cnc;
 pub mod cnc_thread;
+pub mod cnc_torch;
 mod coolant;
 pub mod engine;
 pub mod invert;
@@ -138,6 +139,23 @@ pub struct Dump<'a> {
     /// carries touches - the stream then closes the section with a
     /// `FOUND` record built from the touches. None for every cutting op.
     pub probe_result: Option<probe_rec::ProbeResult>,
+    /// The op's smoothing ask (#616): `Some` only when the document
+    /// turned smoothing on - the stream then carries `PARAM Smoothing
+    /// <mm>` and `PARAM SmoothingMode finish|rough` before the section,
+    /// and the dialect writes its own words (G64 P, G5.1, G187,
+    /// CYCLE832, CYCL DEF 32). None writes nothing: every program a
+    /// document posted before #616 is byte-identical.
+    pub smoothing: Option<Smoothing>,
+}
+
+/// One operation's smoothing ask (#616): the contour deviation the
+/// control may take, mm, and whether the op FINISHES (maximum
+/// accuracy - the control's precise mode) or ROUGHS (the deviation
+/// derived from the stock the op leaves - its aggressive mode).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Smoothing {
+    pub tol_mm: f64,
+    pub finish: bool,
 }
 
 impl<'a> Default for Dump<'a> {
@@ -168,6 +186,7 @@ impl<'a> Default for Dump<'a> {
             coolant: CoolantMode::Flood,
             after: AfterOperation::None,
             probe_result: None,
+            smoothing: None,
         }
     }
 }
@@ -207,6 +226,16 @@ pub fn dump(t: &Toolpath, d: &Dump) -> Vec<Record> {
     if let Some(word) = d.after.param_word() {
         out.push(Record::Param { name: "AfterOperation".into(), value: json!(word) });
     }
+    // #616: the smoothing ask, only when the document turned it on - a
+    // finite positive deviation, or nothing (a script never sees a
+    // tolerance it would have to guess about).
+    if let Some(s) = d.smoothing.filter(|s| s.tol_mm.is_finite() && s.tol_mm > 0.0) {
+        out.push(Record::Param { name: "Smoothing".into(), value: json!(s.tol_mm) });
+        out.push(Record::Param {
+            name: "SmoothingMode".into(),
+            value: json!(if s.finish { "finish" } else { "rough" }),
+        });
+    }
     // A path stating spindle C angles (issue #33) is live-tool work on
     // a C turn: the section says so before it opens, so a script can
     // engage C and the live spindle in its preamble - and the engine
@@ -227,6 +256,21 @@ pub fn dump(t: &Toolpath, d: &Dump) -> Vec<Record> {
     if d.tool_number > 0 && !d.tool_name.is_empty() {
         out.push(Record::Tool { number: d.tool_number, name: d.tool_name.into() });
     }
+    // The plasma header (#671) precedes the section, so a plasma post
+    // knows the section it opens is torch work; a record that does not
+    // sit on its moves is not trusted and not written - the post then
+    // refuses the section by name for want of it.
+    let plasma = match &t.plasma {
+        Some(p) if p.is_sane(&t.moves) => {
+            out.push(Record::Plasma(cnc_torch::PlasmaRec::from_cut(p)));
+            Some(p)
+        }
+        Some(_) => {
+            out.push(Record::Warn { text: "plasma: the torch spans do not sit on the moves - refused".into() });
+            None
+        }
+        None => None,
+    };
     out.push(Record::Section { begin: true });
     if let Some(advance) = d.part_load {
         out.push(Record::Part {
@@ -297,7 +341,17 @@ pub fn dump(t: &Toolpath, d: &Dump) -> Vec<Record> {
     if d.probe_result.is_some() && touches.is_empty() {
         out.push(Record::Warn { text: "probing: the probe path carries no touch - refused".into() });
     }
-    for (mi, m, pre) in program::program_order(t, &mut out) {
+    let order = program::program_order(t, &mut out);
+    let anchors: Vec<usize> = order.iter().map(|(mi, _, _)| *mi).collect();
+    let mut lit_next = 0usize;
+    for (k, (mi, m, pre)) in order.into_iter().enumerate() {
+        // The torch (#671): struck before the first record of its span
+        // (ahead of a G41/G42 engage, which rides the lead-in itself).
+        if let Some(sp) = plasma.and_then(|p| p.torches.get(lit_next)).filter(|sp| sp.on <= mi && mi <= sp.off)
+            && (k == 0 || anchors[k - 1] < sp.on)
+        {
+            out.push(Record::Torch(cnc_torch::TorchRec::on(sp)));
+        }
         while ci < cycles.len() && cycles[ci].first_move <= mi {
             out.push(Record::Cycle(cycles[ci].clone()));
             ci += 1;
@@ -397,6 +451,16 @@ pub fn dump(t: &Toolpath, d: &Dump) -> Vec<Record> {
         if open_thread == Some(mi) {
             out.push(Record::Thread(None));
             open_thread = None;
+        }
+        // ...and put out after the last record of its span (a control-
+        // compensated span's programmed moves all anchor on its end).
+        if let Some(sp) = plasma.and_then(|p| p.torches.get(lit_next))
+            && mi <= sp.off
+            && mi >= sp.on
+            && anchors.get(k + 1).is_none_or(|n| *n > sp.off)
+        {
+            out.push(Record::Torch(cnc_torch::TorchRec::off(sp.contour)));
+            lit_next += 1;
         }
     }
     if open_thread.is_some() {

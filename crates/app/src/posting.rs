@@ -37,14 +37,26 @@ pub const BUILTINS: &[(&str, &str)] = &[
     ("Heidenhain", include_str!("../../../assets/posts/heidenhain.cps")),
     ("Mazak", include_str!("../../../assets/posts/mazak.cps")),
     ("Tormach PathPilot", include_str!("../../../assets/posts/tormach.cps")),
+    ("Doosan DNM", include_str!("../../../assets/posts/doosan-dnm.cps")),
+    ("Makera Carvera", include_str!("../../../assets/posts/carvera.cps")),
     ("Fanuc Lathe", include_str!("../../../assets/posts/fanuc-lathe.cps")),
+    ("Tormach PathPilot Lathe", include_str!("../../../assets/posts/tormach-lathe.cps")),
+    // #671: the plasma dialect, from UM10720 §6-7 and the PathPilot
+    // post guidelines; it serves plasma tables only (`PLASMA_POSTS`).
+    ("Tormach PathPilot Plasma", include_str!("../../../assets/posts/tormach-plasma.cps")),
 ];
 
 /// The registry entries that speak TURNING (M13.5): X as a diameter
 /// on one meridian, G18, G99, the face cycles. Everything else in
 /// `BUILTINS` is a milling dialect. The picker filters by the mounted
 /// machine's kind through [`post_serves`]; a mill-turn lists both.
-pub const LATHE_POSTS: &[&str] = &["Fanuc Lathe"];
+pub const LATHE_POSTS: &[&str] = &["Fanuc Lathe", "Tormach PathPilot Lathe"];
+
+/// The registry entries that speak PLASMA (#669): the torch words, no
+/// spindle and no Z depth. #671 ships the PathPilot plasma post for the
+/// Tormach 1300PL; it serves plasma tables only, and no cutting post
+/// serves one (a torch has no spindle for their S/M3).
+pub const PLASMA_POSTS: &[&str] = &["Tormach PathPilot Plasma"];
 
 /// Whether a registry entry can post programs for a machine of this
 /// kind: a lathe post serves lathes and mill-turns, a mill post serves
@@ -55,10 +67,13 @@ pub const LATHE_POSTS: &[&str] = &["Fanuc Lathe"];
 pub fn post_serves(name: &str, kind: crate::machine::Kind) -> bool {
     use crate::machine::Kind;
     let lathe_post = LATHE_POSTS.contains(&name);
+    let plasma_post = PLASMA_POSTS.contains(&name);
     match kind {
-        Kind::Mill => !lathe_post,
+        Kind::Mill => !lathe_post && !plasma_post,
         Kind::Lathe => lathe_post,
-        Kind::MillTurn => true,
+        Kind::MillTurn => !plasma_post,
+        // #669: a cutting post would write spindle words a torch has not.
+        Kind::Plasma => plasma_post,
     }
 }
 
@@ -71,6 +86,10 @@ pub fn post_serves(name: &str, kind: crate::machine::Kind) -> bool {
 pub fn default_post_for(kind: crate::machine::Kind) -> PostRef {
     match kind {
         crate::machine::Kind::Lathe => LATHE_POSTS
+            .first()
+            .map_or(PostRef::Builtin, |n| PostRef::Named((*n).to_owned())),
+        // #669/#671: the first plasma post (PathPilot's, for the 1300PL).
+        crate::machine::Kind::Plasma => PLASMA_POSTS
             .first()
             .map_or(PostRef::Builtin, |n| PostRef::Named((*n).to_owned())),
         _ => PostRef::Builtin,
@@ -103,8 +122,17 @@ pub fn post_offer(world: &World) -> Option<(&'static str, PostRef)> {
     if post_serves(name, kind) {
         return None;
     }
-    let serves = if LATHE_POSTS.contains(&name) { "lathe" } else { "mill" };
-    Some((serves, default_post_for(kind)))
+    let serves = if LATHE_POSTS.contains(&name) {
+        "lathe"
+    } else if PLASMA_POSTS.contains(&name) {
+        "plasma"
+    } else {
+        "mill"
+    };
+    // #669: an offer that would not serve the mount either (a plasma
+    // table before any plasma post ships) is no offer.
+    let offer = default_post_for(kind);
+    post_name(&offer).is_some_and(|n| post_serves(n, kind)).then_some((serves, offer))
 }
 
 /// The default machine as text: a plain 3-axis VMC with flood coolant.
@@ -128,6 +156,8 @@ pub const MACHINES: &[(&str, &str)] = &[
     ("Tormach 770MX", include_str!("../../../assets/machines/tormach-770mx.mch")),
     // #170: the other Tormach mills, each from its own operator's manual.
     ("Tormach 770MX (ML)", include_str!("../../../assets/machines/tormach-770mx-ml.mch")),
+    // #785: the 770MX with Tormach's microARC 4 (TD10749) as an A about X.
+    ("Tormach 770MX + microARC 4", include_str!("../../../assets/machines/tormach-770mx-microarc4.mch")),
     ("Tormach 770M", include_str!("../../../assets/machines/tormach-770m.mch")),
     ("Tormach 1100MX", include_str!("../../../assets/machines/tormach-1100mx.mch")),
     ("Tormach 1500MX", include_str!("../../../assets/machines/tormach-1500mx.mch")),
@@ -142,6 +172,23 @@ pub const MACHINES: &[(&str, &str)] = &[
     // #618: the M+ upgrade kits - the M's figures with the MX's axis speeds.
     ("Tormach 770M+", include_str!("../../../assets/machines/tormach-770m-plus.mch")),
     ("Tormach 1100M+", include_str!("../../../assets/machines/tormach-1100m-plus.mch")),
+    // #620: the PathPilot routers, each from its own manual / spec sheet
+    // (the plain xsTECH from its spec sheet and knowledge base: no manual).
+    ("Tormach 24R", include_str!("../../../assets/machines/tormach-24r.mch")),
+    ("Tormach xsTECH Pro", include_str!("../../../assets/machines/tormach-xstech-pro.mch")),
+    ("Tormach xsTECH", include_str!("../../../assets/machines/tormach-xstech.mch")),
+    // #669: the plasma table, from UM10720 §2 and the 03/24 spec sheet.
+    ("Tormach 1300PL", include_str!("../../../assets/machines/tormach-1300pl.mch")),
+    // #611: Tormach's lathes, from their operator manuals (UM10753, UM10225).
+    ("Tormach 8L", include_str!("../../../assets/machines/tormach-8l.mch")),
+    ("Tormach 15L Slant-PRO", include_str!("../../../assets/machines/tormach-15l-slant-pro.mch")),
+    // #619: the 15LX (UM10860 §3.1).
+    ("Tormach 15LX Slant-PRO", include_str!("../../../assets/machines/tormach-15lx-slant-pro.mch")),
+    // #707: Makera's desktop mills, from Makera's product spec tables.
+    ("Makera Carvera", include_str!("../../../assets/machines/makera-carvera.mch")),
+    ("Makera Carvera Air", include_str!("../../../assets/machines/makera-carvera-air.mch")),
+    // #614: Doosan DNM 5700 VMC (Fanuc 0i-MF).
+    ("Doosan DNM 5700", include_str!("../../../assets/machines/doosan-dnm.mch")),
 ];
 
 /// The mount path a built-in library entry records (stage C): the
@@ -190,7 +237,8 @@ pub fn document_post_of(world: &World) -> PostRef {
 /// one answer the post and the machine's spindle-range check both read.
 #[must_use]
 pub fn posted_rpm(tool: &crate::tools::Tool) -> f64 {
-    if tool.kind == crate::tools::ToolKind::Probe { 0.0 } else { tool.rpm }
+    // A torch states rpm 0 by law (#670): no spindle word, like a probe.
+    if matches!(tool.kind, crate::tools::ToolKind::Probe | crate::tools::ToolKind::Torch) { 0.0 } else { tool.rpm }
 }
 
 /// Write the singleton. For the `SelectPost` command and the project
@@ -199,11 +247,12 @@ pub fn post_set(world: &World, next: &PostRef) {
     world.set(next.clone());
 }
 
-/// The document's post options (issue #34), from the `PostOptions`
-/// singleton; the default when none was ever set.
+/// The post options the program posts with (issue #34): the active
+/// setup's (#389 - its own, else the document's `PostOptions`
+/// singleton, [`crate::setup_post_options::document`]).
 #[must_use]
 pub fn post_options(world: &World) -> PostOptions {
-    world.try_get::<&PostOptions>(|p| *p).unwrap_or_default()
+    crate::setup_post_options::in_force(world)
 }
 
 /// Write the options singleton. For `SetPostOptions` and the project
@@ -223,6 +272,12 @@ pub fn options_value(o: PostOptions) -> Value {
         ThreadingOutput::G76Cycle => "G76",
     };
     let mut v = serde_json::json!({ "Threading": threading });
+    // #616: stated only when on - off, the object a script sees is
+    // byte-identical to before (the posts read the per-op PARAMs; this
+    // word is for a script that wants the document-wide switch).
+    if o.smoothing {
+        v["Smoothing"] = serde_json::json!(true);
+    }
     let end = match o.end_units {
         EndUnits::Leave => None,
         EndUnits::Inch => Some("inch"),
@@ -321,6 +376,9 @@ pub struct Posted {
 
 #[path = "posting_sim.rs"]
 mod sim_clause_impl;
+#[path = "posting_plasma.rs"]
+mod plasma_clause_impl;
+pub use plasma_clause_impl::{plasma_clause, PlasmaClause, PLASMA_VERDICT};
 #[path = "posting_per_op.rs"]
 mod per_op;
 #[path = "posting_suppressed.rs"]
@@ -333,6 +391,8 @@ mod wcs_slot;
 mod mounts;
 #[path = "posting_nose.rs"]
 pub mod nose;
+#[path = "posting_index_swing.rs"]
+pub mod index_swing;
 pub(crate) use wcs_rotation::{offset_frame, OffsetFrame};
 pub use mounts::{
     machine_checks, machine_value_for, machine_value_of, post_mounts, post_mounts_script, post_of_setup, PostedMount,
@@ -367,7 +427,7 @@ pub fn post_setup(world: &World, out_path: &Path) -> Result<Posted, String> {
 /// parameterized - what a caller holding a script text runs, and
 /// what the tests use to exercise the script seam directly.
 pub fn post_script(world: &World, out_path: &Path, cps: &str) -> Result<Posted, String> {
-    let started = std::time::Instant::now();
+    let started = crate::clock::Instant::now();
     let posted = post_script_body(world, out_path, cps);
     match &posted {
         Ok(p) => tracing::info!(
@@ -567,6 +627,12 @@ pub fn verification_report(world: &World) -> GateReport {
 
     let sim = sim_clause(world);
     problems.extend(sim.problem);
+    // The plasma clause (#672): the 3D stock sim carves nothing for a
+    // torch, so a plasma op's verdict is the 2D through-cut laws, run
+    // here - a refusal blocks, and the not-judged line says the sim did
+    // not run for it, never a silent skip.
+    let plasma = plasma_clause(world);
+    problems.extend(plasma.problems);
 
     // The suppression clause (#110 review B1): an op generated against
     // a suppressed op's cut refuses by name - the cut it assumed is not
@@ -574,6 +640,10 @@ pub fn verification_report(world: &World) -> GateReport {
     problems.extend(suppressed::suppressed_problems(world));
     // The rotated-offset clause (#315): the post carries translation only.
     problems.extend(wcs_rotation::rotated_wcs_problems(world));
+    // #389: the setups' post options must agree on what shapes the whole
+    // program (the Output and the thread output) - never posted half one
+    // way. Judged program-wide, ahead of #388's per-mount split.
+    problems.extend(crate::setup_post_options::program_problems(world));
     // The carried-stock clause (#319): a feed move into carried material
     // outside a setup's declared stock is engagement nothing verified.
     problems.extend(crate::operation::carried_problems(world));
@@ -581,6 +651,9 @@ pub fn verification_report(world: &World) -> GateReport {
     // The limit check (M2.3 D), each op against the machine its own
     // setup mounts (#388): one block per machine, the program's order.
     problems.extend(mounts::machine_problems(world));
+    // #804: before a work-turning A indexes, the retracted tool tip
+    // clears what the stock, parts and turning fixtures sweep about it.
+    problems.extend(index_swing::index_swing_problems(world));
 
     // The workholding clause (M3.2 B, live-gate law): the same fixture
     // bands and rapid laws generation reports early, re-run HERE against
@@ -603,7 +676,12 @@ pub fn verification_report(world: &World) -> GateReport {
     // what came after it). The law and lines live in
     // `operation::probe_problems`.
     problems.extend(crate::operation::probe_problems(world));
-    GateReport { problems, not_judged: sim.not_judged }
+    let not_judged = match (sim.not_judged, plasma.line) {
+        (Some(s), Some(p)) => Some(format!("{s}; {p}")),
+        (None, Some(p)) => Some(format!("{NOT_JUDGED}: {p}")),
+        (s, None) => s,
+    };
+    GateReport { problems, not_judged }
 }
 
 /// The gate's fixture walk: one problem string per operation with a
@@ -721,9 +799,12 @@ pub fn op_streams(world: &World) -> Result<Vec<(String, Vec<cnc::Record>)>, Stri
         return Err(msg);
     }
 
-    let skip_stops = post_options(world).skip_stops;
-    // #155: Pause / Home entries fold into the gap they stand in.
-    let afters = crate::program_entry::posted_afters(world, &ops, skip_stops)?;
+    // #155: Pause / Home entries fold into the gap they stand in; #389:
+    // "Skip pauses and homes" is read per op, from its own setup.
+    let afters = crate::program_entry::posted_afters(world, &ops, |e| {
+        model::operation_of(world, e)
+            .is_some_and(|op| crate::setup_post_options::of(world, op.setup.as_deref()).skip_stops)
+    })?;
     let mut streams = Vec::with_capacity(ops.len());
     for (name, e) in &ops {
         let op = model::operation_of(world, e)
@@ -808,6 +889,15 @@ pub fn op_streams(world: &World) -> Result<Vec<(String, Vec<cnc::Record>)>, Stri
             part_unload,
             part_transfer,
             probe_tol,
+            // #616: the op's smoothing ask, only when its OWN setup's
+            // post options turn smoothing on (off: byte-identical output) -
+            // read per op like "Skip pauses and homes" (#389), never from
+            // whichever setup happens to be active.
+            smoothing: if crate::setup_post_options::of(world, op.setup.as_deref()).smoothing {
+                crate::smoothing::of(&op.params)
+            } else {
+                None
+            },
             coolant: op.coolant,
             // "Skip pauses and homes" (#110) mutes every after-action
             // at post; the ops keep their choices. Entries ride it (#155).
@@ -866,6 +956,7 @@ impl HeightRefs for OpParams {
     fn heights(&self) -> Vec<&Height> {
         match self {
             OpParams::Probe { clearance_z, .. } => vec![clearance_z],
+            OpParams::PlasmaProfile(p) => vec![&p.clearance_z, &p.top_z, &p.bottom_z],
             OpParams::Face {
                 clearance_z,
                 cut_z,
@@ -906,6 +997,13 @@ impl HeightRefs for OpParams {
                 ..
             }
             | OpParams::Slot {
+                clearance_z,
+                retract_z,
+                top_z,
+                bottom_z,
+                ..
+            }
+            | OpParams::TrochoidalSlot {
                 clearance_z,
                 retract_z,
                 top_z,

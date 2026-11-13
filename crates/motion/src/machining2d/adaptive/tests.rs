@@ -59,7 +59,11 @@ fn a_channel_is_grown_as_one_spiral_that_never_crosses() {
         helix_r: 1.2,
         smooth: 2.5,
     };
+    budget::PEAK.with(|p| p.set(0));
     let Ok(pl) = plan(&reach, &center, &spec) else { panic!("plan") };
+    // Issue #850: it spends ~246 k of the 600 k geometry budget.
+    let peak = budget::PEAK.with(|p| p.get());
+    assert!(peak > 0 && peak as f64 * 1.9 <= budget::GEOM_MAX as f64, "{peak} vertices");
     assert!(pl.passes.len() > 1 && pl.joins.len() == pl.passes.len(), "lifted pieces: {:?}", pl.notes);
     assert!(pl.joins.iter().skip(1).filter(|j| j.is_some()).count() * 10 >= 9 * (pl.passes.len() - 1), "returns lifted: {:?}", pl.notes);
     assert!(first_crossing(&pl.passes).is_none(), "{:?}", pl.notes);

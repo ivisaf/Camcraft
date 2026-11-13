@@ -102,7 +102,7 @@ impl SdfField {
     /// mesh layer is shared) - a playback snapshot's price, measured.
     #[must_use]
     pub fn cut_layer_bytes(&self) -> usize {
-        (self.cuts.len() + self.cut_ups.len()).saturating_mul(BRICK3 * std::mem::size_of::<f64>())
+        (self.cuts.len() + self.cut_ups.len() + self.cut_downs.len()).saturating_mul(BRICK3 * std::mem::size_of::<f64>())
     }
 
     /// Cut bricks (brick keys) whose cut-layer values changed since the
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn the_region_holds_the_band_and_the_box() {
-        let f = SdfField::from_mesh(&super::super::field::tests::box_facets(), 1.0, 4).unwrap();
+        let f = SdfField::from_mesh(&super::super::field_shell::tests::box_facets(), 1.0, 4).unwrap();
         for (a, r) in f.cost.region.iter().enumerate() {
             // the 4-cell box, its band of 4, the pad, all inside
             assert!(r.0 <= -9 && r.1 >= 12, "axis {a}: {r:?}");

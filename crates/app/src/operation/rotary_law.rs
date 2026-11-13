@@ -38,7 +38,7 @@ pub(super) fn rotary_into(
     path: &crate::cl::Toolpath,
     part: &[Triangle],
     stock: Option<&[Triangle]>,
-    tool: &crate::tools::Tool,
+    cutter: &verify::Cutter,
     tolerance: f64,
 ) {
     let hits = match crate::multiaxis::axis::fit(part) {
@@ -47,7 +47,7 @@ pub(super) fn rotary_into(
             &verify::RotaryAxis { origin: ax.origin, dir: [ax.dir.x, ax.dir.y, ax.dir.z] },
             stock,
             part,
-            &verify::Cutter::of(tool),
+            cutter,
             &verify::RotaryLaw {
                 cell: CELL,
                 step: STEP,

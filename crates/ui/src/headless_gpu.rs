@@ -37,29 +37,40 @@ pub struct HeadlessGpu {
 /// The env var that turns a test's "no adapter" skip into a failure.
 pub const REQUIRE_GPU_ENV: &str = "CAMCRAFT_REQUIRE_GPU";
 
-fn try_kind(instance: &wgpu::Instance, kind: AdapterKind) -> Result<HeadlessGpu, String> {
+async fn try_kind(instance: &wgpu::Instance, kind: AdapterKind) -> Result<HeadlessGpu, String> {
     let options = wgpu::RequestAdapterOptions {
         force_fallback_adapter: kind == AdapterKind::Software,
         power_preference: wgpu::PowerPreference::LowPower,
         compatible_surface: None,
         ..Default::default()
     };
-    let adapter = pollster::block_on(instance.request_adapter(&options))
+    let adapter = instance
+        .request_adapter(&options)
+        .await
         .map_err(|err| format!("{} adapter: {err}", kind.label()))?;
     let info = adapter.get_info();
     let name = format!("\"{}\" via {:?}", info.name, info.backend);
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .map_err(|err| format!("{} device {name}: {err}", kind.label()))?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor::default())
+        .await
+        .map_err(|err| format!("{} device {name}: {err}", kind.label()))?;
     Ok(HeadlessGpu { device, queue, kind, name })
 }
 
 /// Software adapter first, then hardware. The error names why each failed.
+/// Native only: it blocks on the adapter, which a browser cannot (#31) -
+/// `device_async` is the same choice, awaited.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn device() -> Result<HeadlessGpu, String> {
+    pollster::block_on(device_async())
+}
+
+/// `device`, awaiting the adapter and device requests instead of blocking.
+pub async fn device_async() -> Result<HeadlessGpu, String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let mut why = Vec::new();
     for kind in [AdapterKind::Software, AdapterKind::Hardware] {
-        match try_kind(&instance, kind) {
+        match try_kind(&instance, kind).await {
             Ok(gpu) => return Ok(gpu),
             Err(err) => why.push(err),
         }
@@ -71,6 +82,7 @@ pub fn device() -> Result<HeadlessGpu, String> {
 /// line to stderr when the machine has no adapter at all. With
 /// `CAMCRAFT_REQUIRE_GPU=1` a missing adapter is `Err` instead, so a lane
 /// that must render can't pass by skipping.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn device_for_test(suite: &str) -> Result<Option<HeadlessGpu>, String> {
     match device() {
         Ok(gpu) => {

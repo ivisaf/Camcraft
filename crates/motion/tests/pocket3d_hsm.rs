@@ -161,7 +161,7 @@ fn read_levels(path: &Toolpath, region: &Region) -> Vec<LevelRead> {
     // Stock from Z 0: both planes are real 5 mm cuts, the boss column
     // standing at -5 after the first (the island the second rings).
     let Ok(mut dex) = stock_for(region, 0.0, -10.0, 1.0, &spec) else { panic!("stock") };
-    let q = measure(path, &mut dex, &spec);
+    let q = measure(path, &mut dex, &spec).unwrap();
     // The reader's own bore law: a planar cut inside a helical descent's
     // circle is the bore's cleanup, read as entry engagement - not the
     // clearing's load (`quality::measure`'s `bores`).

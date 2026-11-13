@@ -51,12 +51,23 @@ pub struct MachinesPane {
     pub user_dir: Option<Option<PathBuf>>,
     /// The machine file open in the editor, if any.
     pub editor: Option<MachineFileEditor>,
-    /// The kind New blank starts.
-    pub new_kind: usize,
+    /// The kind filter (#816): `None` = "All", else an index into
+    /// `KINDS`. Filters the list and picks the kind New blank starts;
+    /// under "All" New blank is disabled.
+    pub kind_filter: Option<usize>,
 }
 
 /// The kinds New blank offers, in the combo's order.
-const KINDS: [Kind; 3] = [Kind::Mill, Kind::Lathe, Kind::MillTurn];
+const KINDS: [Kind; 4] = [Kind::Mill, Kind::Lathe, Kind::MillTurn, Kind::Plasma];
+
+/// The dropdown's first entry: no filter, New blank shut.
+pub(crate) const ALL_KINDS: &str = "All";
+
+/// Does the entry show under the kind filter? A machine whose file
+/// states no kind shows only under "All".
+pub(crate) fn matches_filter(e: &MachineEntry, want: Option<Kind>) -> bool {
+    want.is_none_or(|k| e.kind == Some(k))
+}
 
 /// A list row's words: name, then kind, axes and units - unique per
 /// entry in practice, and what a test finds the row by.
@@ -113,8 +124,15 @@ pub(crate) fn draw(ui: &mut Ui, state: &mut State, pal: &Tokens) {
     let p = &mut state.machines_pane;
     let Some(list) = p.list.as_ref() else { return };
     let mut reread = false;
+    let want = p.kind_filter.and_then(|i| KINDS.get(i)).copied();
+    let shown = list.iter().filter(|e| matches_filter(e, want)).count();
     ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("{} machines", list.len())).color(pal.text_dim));
+        let count = if want.is_some() {
+            format!("{shown} of {} machines", list.len())
+        } else {
+            format!("{} machines", list.len())
+        };
+        ui.label(RichText::new(count).color(pal.text_dim));
         if ui
             .button("Refresh")
             .on_hover_text("Read the machine files again")
@@ -127,15 +145,27 @@ pub(crate) fn draw(ui: &mut Ui, state: &mut State, pal: &Tokens) {
     let mut open: Option<Result<MachineDraft, String>> = None;
     if p.editor.is_none() {
         ui.horizontal_wrapped(|ui| {
-            let kind = KINDS.get(p.new_kind).copied().unwrap_or(Kind::Mill);
             egui::ComboBox::from_id_salt("machines-new-kind")
-                .selected_text(kind.word())
+                .selected_text(want.map_or(ALL_KINDS, |k| k.word()))
                 .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut p.kind_filter, None, ALL_KINDS);
                     for (i, k) in KINDS.iter().enumerate() {
-                        ui.selectable_value(&mut p.new_kind, i, k.word());
+                        ui.selectable_value(&mut p.kind_filter, Some(i), k.word());
                     }
                 });
-            if ui.button("New blank").on_hover_text("A new machine file with the keys its kind requires").clicked() {
+            // A blank file needs a kind: shut under "All", accent-filled
+            // once a kind is picked.
+            let mut blank = egui::Button::new("New blank");
+            if want.is_some() {
+                blank = blank.fill(pal.accent);
+            }
+            if ui
+                .add_enabled(want.is_some(), blank)
+                .on_hover_text("A new machine file with the keys its kind requires")
+                .on_disabled_hover_text("Pick a kind first")
+                .clicked()
+                && let Some(kind) = want
+            {
                 open = Some(Ok(MachineDraft::blank(kind)));
             }
             let has = picked.is_some();
@@ -173,7 +203,13 @@ pub(crate) fn draw(ui: &mut Ui, state: &mut State, pal: &Tokens) {
         .max_height((ui.available_height() * 0.4).max(80.0))
         .auto_shrink([false, true])
         .show(ui, |ui| {
+            if shown == 0 {
+                ui.label(RichText::new("No machines of this kind.").color(pal.text_dim));
+            }
             for (i, e) in list.iter().enumerate() {
+                if !matches_filter(e, want) {
+                    continue;
+                }
                 let r = ui
                     .selectable_label(p.selected == Some(i), row_label(e))
                     .on_hover_text(e.source.label());
@@ -184,6 +220,14 @@ pub(crate) fn draw(ui: &mut Ui, state: &mut State, pal: &Tokens) {
         });
     if let Some(i) = chose {
         p.selected = Some(i);
+    }
+    // A selection the filter hides is dropped, so no hidden row stays
+    // the target of Edit / Use for this setup.
+    if p.selected
+        .and_then(|i| list.get(i))
+        .is_some_and(|e| !matches_filter(e, want))
+    {
+        p.selected = None;
     }
     ui.separator();
     if let Some(ed) = p.editor.as_mut() {

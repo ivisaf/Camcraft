@@ -23,8 +23,10 @@
 
 // pub(crate) for its own unit tests and the shell's init path: the M4.2
 // GPU backend pick - parse, honest fallback chain, adapter log line.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod frame_watch;
 pub(crate) mod gpu;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod gpu_init;
 pub(crate) mod gpu_select;
 // pub: the M6.1 D readability golden reads it beside the two built-in
@@ -39,6 +41,8 @@ mod stock_info;
 // pub: M13.4's ColorVision layer - the viewport, the traced stock and
 // the overlay lines read the palette; `cvd` is its maths.
 pub mod colorvision;
+pub mod ground_ink;
+pub mod window_chrome;
 mod post_options;
 pub mod cvd;
 mod icons;
@@ -47,6 +51,7 @@ mod load_field;
 // pub(crate) past egui_app: `State::machine_editor` names its draft
 // type (M3.3 stage C), so state.rs has to see through the door.
 pub(crate) mod machine_editor;
+mod machine_grid;
 // pub(crate) for the same reason: `State::post_refusal` names its type.
 pub(crate) mod post_refusal;
 // pub(crate) for the same reason: `State::machines_pane` (#287).
@@ -66,17 +71,26 @@ mod tool_body_page;
 // #630: the tool editor's lathe orientation row.
 mod tool_orientation_row;
 mod tool_profile_page;
+// #793: the built-in taper holder picker in the Profile section.
+mod tool_holder_picker;
+// #93 slice 2: the Profile tab's drawn cutter, neck and shank.
+mod tool_cutter_page;
 mod setup_wcs_pick;
 // #343: a setup's own node pages (settings, machine, post, fixtures, tools).
 mod setup_pages;
+mod setup_post_page;
 // #509: one fixture's row on the Fixtures page, sized to the pane.
 mod fixture_rows;
+// #561: the locate-in-fixture mate tools (Fixtures page and Model page).
+mod locate_form;
 // #326: the Setups page's part-alignment control.
 mod setup_align_pick;
 pub(crate) use setup_align_pick::align_text;
 // #330: the Setups page's lay-on-a-plane row.
 mod setup_plane_pick;
 mod setup_axis_pick;
+// #555: the Setups page's lay-on-three-points row.
+mod setup_points_pick;
 // #316: the setup page's "relative to the previous setup" control.
 mod setup_relative_pick;
 // The operation dialog, split out of `pages` with the property grid
@@ -86,7 +100,13 @@ mod fields;
 mod geo_page;
 mod heights_page;
 mod holes_page;
+mod pockets_page;
+#[cfg(test)]
+pub(crate) use pockets_page::row_text as pockets_row_text;
 mod probe_page;
+// #670: the Plasma Profile's page.
+mod plasma_page;
+mod trochoid_page;
 mod kind_editors;
 mod mill2d_more_page;
 mod mill2d_page;
@@ -94,6 +114,7 @@ mod mill3d_page;
 mod multiaxis_page;
 mod op_page;
 // #144: macOS Cmd+Q / app-menu Quit routed through the guarded Quit.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod os_quit;
 mod params_page;
 mod rotary_page;
@@ -114,7 +135,22 @@ mod tree_menu;
 mod fixture_menu;
 // #339 slice 6: the fixture library's Save / Insert dialogs.
 pub(crate) mod fixture_library_dialog;
+pub(crate) mod fixture_vise_dialog;
+pub(crate) mod fixture_plate_dialog;
+mod fixture_plate_rows;
+mod fixture_modvise_rows;
+pub(crate) mod fixture_accessory_dialog;
+mod fixture_accessory_rows;
 pub(crate) mod shell;
+// #31: the winit window, loop and per-frame draw - native only; the
+// browser build keeps `shell` (the shared frame) and refuses `run` below.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod shell_window;
+// #31: the browser shell - eframe's web runner over a canvas; wasm32 only.
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod shell_web;
+// #31: the 3D pass and repaint law both shells share.
+pub(crate) mod view_pass;
 // pub past egui_app from M6.1 C: the switcher's resolution seam
 // (state.rs) installs the live table, the format tests read the
 // columns beside their parser, and every draw site already read
@@ -138,7 +174,19 @@ mod fixture_tests;
 #[cfg(test)]
 mod fixture_ux_tests;
 #[cfg(test)]
+mod locate_tests;
+#[cfg(test)]
 mod fixture_library_tests;
+#[cfg(test)]
+mod fixture_vise_tests;
+#[cfg(test)]
+mod fixture_self_centering_tests;
+#[cfg(test)]
+mod fixture_plate_tests;
+#[cfg(test)]
+mod fixture_modvise_tests;
+#[cfg(test)]
+mod fixture_accessory_tests;
 #[cfg(test)]
 mod footer_tests;
 #[cfg(test)]
@@ -152,11 +200,15 @@ mod after_op_tests;
 #[cfg(test)]
 mod colorvision_tests;
 #[cfg(test)]
+mod viewport_ground_tests;
+#[cfg(test)]
 mod tree_ink_tests;
 #[cfg(test)]
 mod pin_tests;
 #[cfg(test)]
 mod ribbon_icon_tests;
+#[cfg(test)]
+mod plasma_ribbon_tests;
 #[cfg(test)]
 mod debug_info_tests;
 #[cfg(test)]
@@ -173,9 +225,13 @@ mod setup_stock_pick;
 #[cfg(test)]
 mod setup_stock_tests;
 #[cfg(test)]
+mod incoming_view_tests;
+#[cfg(test)]
 mod setup_plane_tests;
 #[cfg(test)]
 mod setup_axis_tests;
+#[cfg(test)]
+mod setup_points_tests;
 #[cfg(test)]
 mod ball_corner_tests;
 #[cfg(test)]
@@ -191,7 +247,7 @@ pub fn run(args: &[String]) -> i32 {
     let pick = match gpu::pick_from(args, env.as_deref()) {
         Ok(p) => p,
         Err(err) => {
-            eprintln!("gpu: {err}");
+            diag_warn!("gpu: {err}");
             return 2;
         }
     };
@@ -200,7 +256,7 @@ pub fn run(args: &[String]) -> i32 {
     let want = match gpu::adapter_from(args, want_env.as_deref()) {
         Ok(w) => w,
         Err(err) => {
-            eprintln!("gpu: {err}");
+            diag_warn!("gpu: {err}");
             return 2;
         }
     };
@@ -209,25 +265,57 @@ pub fn run(args: &[String]) -> i32 {
     let mcp_port = match camcraft_app::mcp::port_from(args, mcp_env.as_deref()) {
         Ok(p) => p,
         Err(err) => {
-            eprintln!("mcp: {err}");
+            diag_warn!("mcp: {err}");
             return 2;
         }
     };
     if args.iter().any(|a| a == "--headless") {
         if pick != gpu::GpuPick::Auto || want.is_some() {
-            println!("gpu: --headless pins the fallback adapter for determinism; backend and adapter picks ignored");
+            diag_info!("gpu: --headless pins the fallback adapter for determinism; backend and adapter picks ignored");
         }
-        match shell::headless::run() {
-            Ok(()) => {
-                println!("egui shell headless: seeded document, command world, View3D green");
-                0
-            }
-            Err(err) => {
-                eprintln!("egui shell headless FAILED: {err}");
-                1
-            }
-        }
+        run_headless()
     } else {
-        shell::run_windowed(pick, want, mcp_port)
+        run_windowed(pick, want, mcp_port)
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+fn run_headless() -> i32 {
+    match shell::headless::run() {
+        Ok(()) => {
+            diag_info!("egui shell headless: seeded document, command world, View3D green");
+            0
+        }
+        Err(err) => {
+            diag_warn!("egui shell headless FAILED: {err}");
+            1
+        }
+    }
+}
+
+/// #31: the headless proof blocks on the adapter and the readback; the
+/// browser build refuses it by name like the windowed entry.
+#[cfg(target_arch = "wasm32")]
+fn run_headless() -> i32 {
+    diag_warn!("{WASM_NO_WINDOW}");
+    2
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn run_windowed(pick: gpu::GpuPick, want: Option<String>, mcp_port: Option<u16>) -> i32 {
+    shell_window::run_windowed(pick, want, mcp_port)
+}
+
+/// #31: the browser build has no winit window to open - its shell is the
+/// web runner still owed on that issue - so the windowed entry refuses by
+/// name instead of pretending.
+#[cfg(target_arch = "wasm32")]
+fn run_windowed(_pick: gpu::GpuPick, _want: Option<String>, _mcp_port: Option<u16>) -> i32 {
+    diag_warn!("{WASM_NO_WINDOW}");
+    2
+}
+
+/// What the wasm32 build says when asked for a native window (#31).
+#[cfg(target_arch = "wasm32")]
+pub(crate) const WASM_NO_WINDOW: &str =
+    "camcraft-ui: the windowed shell and the headless proof are native-only; in a browser the page starts the shell (camcraft_start, #31)";

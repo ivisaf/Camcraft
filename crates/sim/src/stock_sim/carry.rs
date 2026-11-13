@@ -38,7 +38,9 @@ use super::kernel::{StockError, part_surface};
 use crate::geometry::{Point3, Triangle};
 
 /// The refusal for a turn the lattice cannot carry exactly.
-pub const CARRY_TURN_REFUSAL: &str = "the program sim carries the machined body only through flips over X or Y and quarter turns about Z (the turns that keep the tool axis vertical); this turn would re-sample the body at the grid pitch";
+/// Plain words (#866): what the simulation can carry, and why this turn
+/// is not one of those - the caller says which turn and what to do.
+pub const CARRY_TURN_REFUSAL: &str = "the stock simulation can carry machined stock only through a flip over X or Y or a quarter turn about Z (turns that keep the tool axis vertical) - any other turn would have to re-sample the stock and lose its detail";
 
 /// How close a rotation entry must sit to -1, 0 or 1 to be read as one.
 const UNIT_EPS: f64 = 1e-9;
@@ -110,6 +112,18 @@ impl LatticeTurn {
         self.m[0][0] == 0
     }
 
+    /// The turn's signed permutation (#637 E2a): `m` on XY, `s` on Z.
+    pub(crate) fn linear(&self) -> ([[i8; 2]; 2], i8) {
+        (self.m, self.s)
+    }
+
+    /// The turn's translation: what is left of it once the signed
+    /// permutation is baked into a field (#637 E2a).
+    #[must_use]
+    pub fn shift(&self) -> Point3 {
+        Point3::new(self.t[0], self.t[1], self.t[2])
+    }
+
     /// Map a point.
     #[must_use]
     pub fn apply(&self, p: Point3) -> Point3 {
@@ -119,6 +133,33 @@ impl LatticeTurn {
             f64::from(m[1][0]) * p.x + f64::from(m[1][1]) * p.y + t[1],
             f64::from(self.s) * p.z + t[2],
         )
+    }
+
+    /// This turn, then `next` (#637): `then(next).apply(p) ==
+    /// next.apply(self.apply(p))`. Signed permutations compose into
+    /// signed permutations, so the result is a lattice turn again.
+    #[must_use]
+    pub fn then(&self, next: LatticeTurn) -> LatticeTurn {
+        let (a, b) = (self.m, next.m);
+        let mul = |i: usize, j: usize| b[i][0] * a[0][j] + b[i][1] * a[1][j];
+        let m = [[mul(0, 0), mul(0, 1)], [mul(1, 0), mul(1, 1)]];
+        let t = [
+            f64::from(b[0][0]) * self.t[0] + f64::from(b[0][1]) * self.t[1] + next.t[0],
+            f64::from(b[1][0]) * self.t[0] + f64::from(b[1][1]) * self.t[1] + next.t[1],
+            f64::from(next.s) * self.t[2] + next.t[2],
+        ];
+        LatticeTurn { m, s: self.s * next.s, t }
+    }
+
+    /// The pre-image of an image point: the inverse map (#637), exact -
+    /// the XY part is the orthogonal `m`'s transpose and Z's sign is
+    /// its own inverse. `unapply(apply(p)) == p` to rounding - exactly
+    /// for integer shifts, within an ulp of a fractional one (review of
+    /// #646).
+    #[must_use]
+    pub fn unapply(&self, p: Point3) -> Point3 {
+        let (x, y) = self.back_xy(p.x, p.y);
+        Point3::new(x, y, f64::from(self.s) * (p.z - self.t[2]))
     }
 
     /// The XY pre-image of an image point: `m` is orthogonal, so its
@@ -203,6 +244,16 @@ impl Body {
             }
         }
         (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+    }
+
+    /// A body from per-column tops (in `dex`) and floors, as another
+    /// engine read them (#637 step D: a carried field read back onto a
+    /// lattice). `floor.len()` must match the lattice.
+    pub(crate) fn from_parts(dex: Dexel, floor: Vec<f64>, floor_judged: bool) -> Result<Self, String> {
+        if floor.len() != dex.nx * dex.ny {
+            return Err(format!("a body of {} floors on a {}x{} lattice", floor.len(), dex.nx, dex.ny));
+        }
+        Ok(Body { dex, floor, floor_judged })
     }
 
     /// The same body seen through `turn`: its lattice re-indexed onto

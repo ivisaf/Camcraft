@@ -1,18 +1,21 @@
 //! One fixture's row on the Fixtures page (#509): drawn to fit a
 //! default-width properties pane - the name and its position wrap on
-//! one line, the verbs (Place, Unmark, Delete) stand on the next, the
+//! one line, the verbs (Place, Locate part, Unmark, Delete) stand on the next, the
 //! Fixed caption wraps instead of truncating, and the place draft is a
 //! labelled X / Y / Z / yaw form one click from every row. Every edit
 //! still lands through the same commands (`MoveFixture`,
 //! `SetFixtureFixed`, `UntagFixture`, `DeleteFixture`); the draft is
 //! view state, never history.
+//! A built-in vise (#788) adds its jaw opening: Set and "Open to stock",
+//! each one `SetVise`. A built-in accessory (#789) adds its figures and
+//! "Apply sizes", one `SetAccessory` (`fixture_accessory_rows`).
 //! Provenance: our own layout over our own commands; specced from the
 //! contributor's hands-on report on #509, no HSMWorks material involved.
 
 use egui::Ui;
 
 use camcraft_app::schema::Location;
-use camcraft_app::units;
+use camcraft_app::{fixture, model, units};
 
 use crate::state::{CommandKind, FixtureUi, State, quat_yaw_deg};
 
@@ -61,6 +64,8 @@ pub(super) fn row(ui: &mut Ui, state: &mut State, name: &str, loc: &Location, fi
         {
             state.fixture_ui = if is_draft { FixtureUi::default() } else { draft_of(name, loc) };
         }
+        // #561: put the part in this fixture by mates.
+        super::locate_form::arm_button(ui, state, "Locate part…", name, None);
         if ui.small_button("Unmark").clicked() {
             state.pending.push_back(CommandKind::UntagFixture(name.to_owned()));
         }
@@ -70,6 +75,9 @@ pub(super) fn row(ui: &mut Ui, state: &mut State, name: &str, loc: &Location, fi
     });
     if is_draft {
         place_form(ui, state, name);
+    }
+    if super::locate_form::armed_for(state, name, None) {
+        super::locate_form::form(ui, state);
     }
     // #339 slice 4: how the gate judges this steel, and why a box.
     if let Some(m) = state.fixture_mesh_state(name) {
@@ -83,6 +91,47 @@ pub(super) fn row(ui: &mut Ui, state: &mut State, name: &str, loc: &Location, fi
     let mut on = fixed;
     if ui.checkbox(&mut on, "Fixed (does not turn with the part)").on_hover_text(FIXED_HELP).changed() {
         state.pending.push_back(CommandKind::SetFixtureFixed { name: name.to_owned(), fixed: on });
+    }
+    vise_opening(ui, state, name);
+    super::fixture_plate_rows::plate_rows(ui, state, name);
+    super::fixture_accessory_rows::sizes(ui, state, name);
+}
+
+/// A built-in vise's jaw opening (#788): a draft field, Set (one
+/// `SetVise`) and "To stock" (the opening from the setup's stock).
+fn vise_opening(ui: &mut Ui, state: &mut State, name: &str) {
+    let Some(params) = model::find_by_name(&state.world, name)
+        .and_then(|e| fixture::def_of(&state.world, &e))
+        .and_then(|d| d.vise)
+    else {
+        return;
+    };
+    let u = state.units();
+    ui.label(format!(
+        "Built-in vise {} - opens {} at most",
+        params.size,
+        units::len(params.max_opening, u, 3)
+    ));
+    let mut set = None;
+    prop_row(ui, "Jaw opening", |ui| {
+        num(ui, u, state.vise_opening_draft(name, params.opening));
+    });
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        if ui.small_button("Set opening").clicked() {
+            let opening = *state.vise_opening_draft(name, params.opening);
+            set = Some((params.with_opening(opening), false));
+        }
+        if ui
+            .small_button("Open to stock")
+            .on_hover_text("Move the moving jaw against the setup's stock, as the vise stands")
+            .clicked()
+        {
+            set = Some((params.clone(), true));
+        }
+    });
+    if let Some((params, from_stock)) = set {
+        state.pending.push_back(CommandKind::SetVise { name: name.to_owned(), params, from_stock });
     }
 }
 

@@ -104,6 +104,17 @@ impl<'a> Columns<'a> {
 }
 
 impl Columns<'_> {
+    /// An owned stock of what this reader reads (M7.3 4/6): the grid
+    /// or field it borrows, cloned - the program-ahead state a rest
+    /// pass continues cutting without writing the caller's copy.
+    #[must_use]
+    pub fn to_stock(&self) -> Stock {
+        match self.stock {
+            Source::Grid(d) => Stock::Column(d.clone()),
+            Source::Field(f) => Stock::Field(f.clone()),
+        }
+    }
+
     /// The lattice pitch (mm).
     #[must_use]
     pub fn cell(&self) -> f64 {

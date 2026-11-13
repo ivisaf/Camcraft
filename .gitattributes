@@ -1,6 +1,8 @@
 # Golden outputs are compared byte for byte (the post writes LF line
 # ends): pin them to LF in every checkout, whatever core.autocrlf says.
 crates/app/tests/golden/** text eol=lf
+# Tester-kit programs are pinned byte for byte by their tests, like the goldens.
+docs/tester-kits/**/*.nc text eol=lf
 
 # Shell scripts run on macOS / Linux: a CR would break the shebang.
 *.sh text eol=lf

@@ -60,7 +60,14 @@ pub struct Composite {
 impl Composite {
     /// Build the pipeline for the viewport's color `format`. `Err` by
     /// name where the device cannot bind storage to a fragment shader.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Result<Self, String> {
+        pollster::block_on(Self::new_async(device, format))
+    }
+
+    /// `new`, awaiting the device's verdict instead of blocking on it: a
+    /// browser answers the error scope from its event loop (#31).
+    pub async fn new_async(device: &wgpu::Device, format: wgpu::TextureFormat) -> Result<Self, String> {
         if device.limits().max_storage_buffers_per_shader_stage == 0 {
             return Err("the device binds no storage buffers to a fragment shader".into());
         }
@@ -136,7 +143,7 @@ impl Composite {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        if let Some(err) = pollster::block_on(scope.pop()) {
+        if let Some(err) = scope.pop().await {
             return Err(format!("the device refused the composite pipeline ({err})"));
         }
         Ok(Composite { pipeline, bgl, uniform })

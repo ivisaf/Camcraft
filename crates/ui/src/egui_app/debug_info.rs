@@ -86,11 +86,20 @@ pub(crate) fn window(ctx: &Context, state: &mut State) {
     let text = report(state);
     let mut open = true;
     let mut copied = false;
+    // #698: our own caption row (window_chrome), so its buttons hover
+    // like the OS window's; a folded window is the row alone.
+    let id = Id::new("debug-info");
+    let folded = ctx.data(|d| d.get_temp::<bool>(id.with("collapsed"))).unwrap_or(false);
     Window::new("Debug info")
-        .id(Id::new("debug-info"))
-        .open(&mut open)
+        .id(id)
+        .title_bar(false)
+        .resizable(!folded)
         .default_size([480.0, 220.0])
         .show(ctx, |ui| {
+            if super::window_chrome::title_row(ui, id, "Debug info", &mut open) {
+                return;
+            }
+            ui.separator();
             if ui.button("Copy").clicked() {
                 ui.ctx().copy_text(text.clone());
                 copied = true;

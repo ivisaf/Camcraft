@@ -19,6 +19,10 @@
 //!
 //! A drawn spun holder (#93) also writes its outline under `spun`, which
 //! is re-drawn on load (a spindle-frame body; never beside `lathe`).
+//!
+//! A tool's drawn cutter (#93 slice 2) rides the tool record as
+//! `cutter`, the same `[z, r, arc]` points, re-judged against the
+//! tool's numbers on load (`spun_to_dto`, `cutter_from_dto`).
 
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +59,13 @@ pub struct ToolBodyDto {
     /// key can only over-report, never under-read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spun: Option<Vec<[f64; 3]>>,
+    /// #828, additive (no version step): the holder is a machine's
+    /// default, assumed for a new tool - judged no smaller than the
+    /// tool's holder cylinder. Absent (every older file) = picked by the
+    /// user, judged by its real shape. A reader without the key judges
+    /// the drawn holder as it stands.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub machine_default: bool,
 }
 
 /// The turning-frame placement on file (#369).
@@ -86,6 +97,7 @@ impl ToolBodyDto {
                 insert_zone: None,
                 facets,
                 spun,
+                machine_default: b.machine_default,
             },
             BodyFrame::Lathe { place, zone, .. } => Self {
                 source: b.source.clone(),
@@ -95,6 +107,7 @@ impl ToolBodyDto {
                 insert_zone: zone.map(|z| InsertZoneDto { lo: z.lo, hi: z.hi }),
                 facets,
                 spun: None,
+                machine_default: false,
             },
         }
     }
@@ -102,6 +115,12 @@ impl ToolBodyDto {
     /// The body, its envelope or clearance re-derived; a refusal names
     /// the tool.
     pub fn to_body(&self, tool: &str) -> Result<ToolBody, String> {
+        let mut body = self.to_drawn_body(tool)?;
+        body.machine_default = self.machine_default;
+        Ok(body)
+    }
+
+    fn to_drawn_body(&self, tool: &str) -> Result<ToolBody, String> {
         if let Some(pts) = &self.spun {
             if self.lathe.is_some() || self.insert_zone.is_some() {
                 return Err(format!("tool '{tool}': a drawn holder profile is a spindle body, not a lathe one"));
@@ -122,4 +141,17 @@ impl ToolBodyDto {
         };
         built.map_err(|e| format!("tool '{tool}': {e}"))
     }
+}
+
+/// A drawn outline on file: `[z, r, arc]` per point, tip-up.
+#[must_use]
+pub fn spun_to_dto(s: &SpunProfile) -> Vec<[f64; 3]> {
+    s.points().iter().map(|p| [p.z, p.r, p.arc]).collect()
+}
+
+/// A tool's drawn cutter from file, judged against `tool`'s numbers
+/// (`cutter_profile::check`); a refusal names the tool.
+pub fn cutter_from_dto(tool: &crate::tools::Tool, pts: &[[f64; 3]], name: &str) -> Result<SpunProfile, String> {
+    let points = pts.iter().map(|p| SpunPoint { z: p[0], r: p[1], arc: p[2] }).collect();
+    camcraft_tools::cutter_profile::check(tool, points).map_err(|e| format!("tool '{name}': cutter profile: {e}"))
 }

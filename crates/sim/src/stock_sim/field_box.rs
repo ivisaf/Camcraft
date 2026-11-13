@@ -66,8 +66,10 @@ impl SdfField {
             bricks: Arc::new(HashMap::new()),
             cuts: HashMap::new(),
             cut_ups: HashMap::new(),
+            cut_downs: HashMap::new(),
             cost: Box::default(),
             analytic: Some(AnalyticBox { lo, hi }),
+            bounded_cuts: false,
         };
         field.cost.region = super::field_batch::region_of(&field);
         Ok(field)

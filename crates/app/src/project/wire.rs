@@ -61,6 +61,8 @@ pub fn collect(world: &World) -> ProjectFile {
                 number: model::tool_number_of(world, &entity),
                 body: crate::tool_body::body_of(world, &entity)
                     .map(|b| super::tool_body_wire::ToolBodyDto::from_body(&b)),
+                cutter: crate::tool_cutter::cutter_of(world, &entity)
+                    .map(|c| super::tool_body_wire::spun_to_dto(&c)),
                 ..ToolDto::from_tool(&t)
             });
             // The setup payload only ever rides a setup row (the kind test
@@ -81,6 +83,7 @@ pub fn collect(world: &World) -> ProjectFile {
                         post: d.post.as_ref().map(SetupPostDto::from_ref),
                         relative_to: d.relative_to.clone(),
                         stock_source: d.stock_source.map(|s| s.word().to_string()),
+                        post_options: d.post_options.as_ref().map(SetupPostOptionsDto::from_options),
                     })
             } else {
                 None
@@ -93,6 +96,11 @@ pub fn collect(world: &World) -> ProjectFile {
                 .try_get::<&FixtureDef>(|d| FixtureDto {
                     setup: d.setup.clone(),
                     fixed: d.fixed,
+                    vise: d.vise.as_ref().and_then(super::fixture_keys::vise_value),
+                    accessory: d.accessory.as_ref().and_then(super::fixture_keys::accessory_value),
+                    plate: super::plate_dto::plate_value(&d.plate),
+                    on_plate: super::plate_dto::on_plate_value(&d.plate),
+                    mod_jaw: super::modvise_dto::value(d.mod_jaw.as_ref()),
                 });
             let operation = model::operation_of(world, &entity).map(|op| OperationDto {
                 label: model::operation_meta_of(world, &entity).label,
@@ -188,7 +196,7 @@ pub fn collect(world: &World) -> ProjectFile {
         // The default options write no key (issue #34, the post's law);
         // the #110 / #111 switches ride their own top-level keys below.
         post_options: {
-            let o = crate::posting::post_options(world);
+            let o = crate::setup_post_options::document(world);
             (o.threading != crate::schema::ThreadingOutput::default()
                 || o.end_units != crate::schema::EndUnits::default())
             .then(|| PostOptionsDto {
@@ -209,13 +217,6 @@ pub fn collect(world: &World) -> ProjectFile {
             crate::schema::PostRef::Named(name) => Some(PostDto::Named(name)),
             crate::schema::PostRef::File(path) => Some(PostDto::File(path)),
         },
-        // The default theme matches every pre-v41 document, so it
-        // writes no key (the post's law, worn in the theme's clothes).
-        theme: match crate::commands::theme_of(world) {
-            crate::schema::ThemeRef::Dark => None,
-            crate::schema::ThemeRef::Named(name) => Some(ThemeDto::Named(name)),
-            crate::schema::ThemeRef::File(path) => Some(ThemeDto::File(path)),
-        },
         // An unpinned ribbon writes no key (the theme's law, worn in
         // the pin's clothes - and the default is what every pre-M6.2
         // document is).
@@ -223,9 +224,11 @@ pub fn collect(world: &World) -> ProjectFile {
         // No stated material writes no key (the theme's law again).
         material: crate::cutting::material_of(world).map(|m| m.word().to_owned()),
         // Off writes no key (the material's law, #110).
-        skip_stops: crate::posting::post_options(world).skip_stops,
+        skip_stops: crate::setup_post_options::document(world).skip_stops,
         // One combined program writes no key (#111).
-        per_op_files: crate::posting::post_options(world).per_op,
+        per_op_files: crate::setup_post_options::document(world).per_op,
+        // Off writes no key (#616).
+        smoothing: crate::setup_post_options::document(world).smoothing,
         entities,
     }
 }

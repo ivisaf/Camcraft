@@ -163,10 +163,18 @@ fn the_reported_outside_contour_enters_every_level_on_one_arc() {
     assert!(summary.contains("7 level(s)"), "{summary}");
     let notes = t.notes.join(" | ");
     assert!(!notes.contains("needs bounded air"), "the arc is no longer refused on the wall: {notes}");
-    assert!(notes.contains("closes on the lead-in's start"), "{notes}");
-    // The bore ring of the section has no room for the arc beside its
-    // wall: refused by name, its graze stands.
-    assert!(notes.contains("no arc fits beside the wall at the lead-in"), "{notes}");
+    // The seams: no lead-in and lead-out left crossing - the seam law
+    // writes "kept as planned" only when it could not part a crossing
+    // pair, so its absence is the no-crossing-left check. Before #689 the
+    // rings' fitted walks ended on a chord whose tangent kinked at the
+    // seam, and the lead-out was re-solved to close on the lead-in's
+    // start; a closed ring now fits whole, so the tangents agree and the
+    // leads part without the re-solve - either way none is kept crossed.
+    assert!(!notes.contains("kept as planned"), "{notes}");
+    // The bore ring of the section takes no arc beside its wall: held
+    // below (`bore` is empty). On the coarse mesh before #689 it was
+    // refused by name ("no arc fits beside the wall"); on the capped
+    // mesh that refusal no longer arises, and the note was never the law.
     // M11.2 B: the outer ring's lead-in starts about 4.4 deg off the X
     // axis - an oblique vertical plane, which no G17/G18/G19 names - so
     // its entries stay certified chord fans, and the path says so once.
@@ -184,10 +192,21 @@ fn the_reported_outside_contour_enters_every_level_on_one_arc() {
     // The bore ring is BLIND (floor Z 0): it is walked at 20..0 and
     // never below - the old ladder walked it at -5 and -7 too, an
     // annulus cut into the solid under the floor that the flat-region
-    // verifier could not see. Its five 5 mm drops leave no arc room in
-    // the bore's air: they graze by name (noted).
+    // verifier could not see. On the coarse mesh its five 5 mm drops
+    // found no arc room in the bore's air and grazed by name; on the
+    // capped mesh (#689), with the ring fitted whole, a proved arc fits
+    // beside the bore wall. Either way an entry there lands on one of the
+    // bore's own levels, never below its floor, and the verifier above
+    // holds every one of them silent.
     let bore: Vec<_> = all.iter().filter(|&&(s, _)| !outer(&t.moves[s])).collect();
-    assert!(bore.is_empty(), "{bore:?}");
+    // Five: one proved arc entry per bore level (20, 15, 10, 5, 0), each
+    // a chord fan of an arc entry - no graze, no warning (the verifier
+    // silence above covers them: none is a gouge or a crossing).
+    assert_eq!(bore.len(), 5, "one arc entry per bore level: {bore:?}");
+    for &&(_, e) in &bore {
+        let z = t.moves[e - 1].to.z;
+        assert!([20.0, 15.0, 10.0, 5.0, 0.0].contains(&z), "a bore entry lands on a bore level, got {z}");
+    }
     let ring_levels = |keep: &dyn Fn(f64) -> bool| -> Vec<f64> {
         let mut v: Vec<f64> = t
             .moves
@@ -230,9 +249,12 @@ fn the_reported_outside_contour_enters_every_level_on_one_arc() {
         assert_eq!(seq, want, "entry {k}'s approach");
     }
     // Plunges left: the outer ring's deeper approaches to the arc top
-    // (5) and the bore ring's five named grazes.
+    // (5, every level past the second), the bore ring's the same way
+    // for its arc entries, and one graze per bore level that took no
+    // arc (all five grazed on the coarse mesh before #689).
     let plunges = t.moves.iter().filter(|m| m.kind == MoveKind::Plunge).count();
-    assert_eq!(plunges, 5 + 5);
+    // 5 outer + 3 bore (its levels past the second) + 0 grazes.
+    assert_eq!(plunges, 8);
 }
 
 fn disc() -> Region {

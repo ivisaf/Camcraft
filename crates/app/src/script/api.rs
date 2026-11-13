@@ -134,12 +134,38 @@ pub(crate) fn v_generate(env: &mut Env, args: Vec<Value>) -> Result<Value, Strin
     };
     let mut done = Vec::with_capacity(targets.len());
     for (name, entity) in targets {
-        let cmd = GenerateOperation::new(&env.world, &name)
-            .map_err(|e| format!("{name} - {e}"))?;
+        let cmd = GenerateOperation::new(&env.world, &name).map_err(|e| refusal_text(&name, &e))?;
         env.history.execute(&env.world, cmd);
         done.push(op_view(env, &name, &entity, false));
     }
     Ok(Value::Array(done))
+}
+
+/// A refused generation as the script's (and MCP's) error: the refusal,
+/// plus - when the generator handed back the moves it had built (#261
+/// part 3) - how many there were. The moves themselves stay out: they are
+/// the GUI's display-only ghost, never kept, never a toolpath.
+pub fn refusal_text(name: &str, e: &crate::commands::CommandError) -> String {
+    match e.ghost() {
+        Some(g) => format!(
+            "{name} - {e} [a partial path of {} move(s){} was built before the refusal; it is not kept]",
+            g.len(),
+            if g.truncated() { ", capped" } else { "" }
+        ),
+        None => format!("{name} - {e}"),
+    }
+}
+
+/// Does this operation hold the post with its own warnings? The rule
+/// `posting::stream_records` applies when it writes the program: a
+/// suppressed op is not in the program, and every cached warning that
+/// `blocks_post()` becomes a `WARN` record, any one of which refuses the
+/// post (a scallop or probe-search note never does). #722: `ok` read only
+/// generation status, so it said `true` for a program the post refused.
+fn holds_post(env: &Env, entity: &Entity) -> bool {
+    let suppressed = model::operation_of(&env.world, entity).is_some_and(|op| op.suppressed);
+    !suppressed
+        && model::toolpath_of(&env.world, entity).is_some_and(|t| t.warnings.iter().any(|w| w.blocks_post()))
 }
 
 /// `cam.verify(...names)` - what the post would say, without writing:
@@ -148,7 +174,10 @@ pub(crate) fn v_generate(env: &mut Env, args: Vec<Value>) -> Result<Value, Strin
 /// verdict) once everything in scope is fresh. While any operation is
 /// stale or never generated the gate is SKIPPED and says why - its
 /// verdict would speak of paths older than the inputs, and a stale
-/// answer about metal is worse than none.
+/// answer about metal is worse than none. `ok` is the post's whole
+/// verdict: every op in scope fresh, the gate passed, and no op in
+/// scope holding the post with its own warnings (named under
+/// `held_by`).
 pub(crate) fn v_verify(env: &mut Env, args: Vec<Value>) -> Result<Value, String> {
     let all = inventory(env);
     let scope: Vec<(String, Entity, OpStatus)> = if args.is_empty() {
@@ -182,8 +211,13 @@ pub(crate) fn v_verify(env: &mut Env, args: Vec<Value>) -> Result<Value, String>
         json!({ "ok": false, "problems": [], "skipped": "an operation is stale or never generated - regenerate before judging the program" })
     };
     let ops_ok = operations.iter().all(|o| o["status"] == json!("ok"));
-    let ok = ops_ok && fresh && gate["ok"] == json!(true);
-    Ok(json!({ "ok": ok, "operations": operations, "gate": gate }))
+    let held_by: Vec<String> = scope
+        .iter()
+        .filter(|(_, e, _)| holds_post(env, e))
+        .map(|(n, e, _)| model::operation_label(&env.world, n, e))
+        .collect();
+    let ok = ops_ok && fresh && gate["ok"] == json!(true) && held_by.is_empty();
+    Ok(json!({ "ok": ok, "operations": operations, "gate": gate, "held_by": held_by }))
 }
 
 /// `cam.check()` - the whole document's `verify`, the way the post

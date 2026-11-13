@@ -314,7 +314,8 @@ pub fn audit(t: &Toolpath, center_cutting: bool, tool_r: f64, solid: &Solid, sit
 pub fn audit_as(t: &Toolpath, center_cutting: bool, tool_r: f64, solid: &Solid, ball: bool, site: &str) -> Result<(), GenError> {
     match first_solid_plunge_as(t, tool_r, solid, ball).filter(|_| !center_cutting) {
         None => Ok(()),
-        Some((xy, z)) => Err(refusal(site, xy, z)),
+        // #261 part 3: the audited path rides the refusal as its ghost.
+        Some((xy, z)) => Err(refusal(site, xy, z).with_ghost(t)),
     }
 }
 
@@ -322,7 +323,8 @@ pub fn audit_as(t: &Toolpath, center_cutting: bool, tool_r: f64, solid: &Solid, 
 pub fn audit_bar(t: &Toolpath, center_cutting: bool, tool_r: f64, bar: &Bar, site: &str) -> Result<(), GenError> {
     match first_bar_plunge(t, tool_r, bar).filter(|_| !center_cutting) {
         None => Ok(()),
-        Some((xy, z)) => Err(refusal(site, xy, z)),
+        // #261 part 3: the audited path rides the refusal as its ghost.
+        Some((xy, z)) => Err(refusal(site, xy, z).with_ghost(t)),
     }
 }
 

@@ -31,8 +31,10 @@ mod path;
 mod plane;
 mod pose;
 mod rotary;
+mod rotary_unwind;
 pub mod text;
 mod thread;
+mod torch;
 mod touch;
 
 pub use comp::{CompSide, CompSpan};
@@ -43,8 +45,10 @@ pub use moves::{arc_chords, lattice, ArcMove, Move, MoveKind, MAX_ARC_CHORDS};
 pub use path::{PathBuilder, Toolpath};
 pub use plane::ArcPlane;
 pub use thread::{ThreadCycle, ThreadHand};
+pub use torch::{parse_header as parse_plasma_header, parse_off as parse_torch_off, parse_on as parse_torch_on, ContourRole, PlasmaCut, TorchSpan};
 pub use touch::ProbeTouch;
 pub use rotary::{stamp_c, unwrap_near};
+pub use rotary_unwind::unwind_c;
 pub use pose::{angles_to_axis, axis_to_angles, is_vertical, normalize_axis};
 
 #[cfg(test)]

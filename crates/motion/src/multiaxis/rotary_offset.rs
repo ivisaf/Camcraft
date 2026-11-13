@@ -289,7 +289,10 @@ fn develop(
     let air_above = rho_max + q.stock_to_leave.max(0.0);
     // The seam (issue #9): a level whose area a cover end cuts short of
     // a whole lap is refused Adaptive by name (`machining3d::hsm::Seam`).
-    let base = machining3d::pocket3d_air_split(&wrap, &one_lap, &rect, air_above, Some((period, 2.0 * pad)), &q)?;
+    // #261 part 3: a ghost built in the development is not where the
+    // part is - the refusal keeps its words and drops the moves.
+    let base = machining3d::pocket3d_air_split(&wrap, &one_lap, &rect, air_above, Some((period, 2.0 * pad)), &q)
+        .map_err(GenError::without_ghost)?;
     Ok((base, Developed { ax, e1, e2, rho_ref, r }))
 }
 

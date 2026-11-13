@@ -96,7 +96,10 @@ threadHands = true;  // reads PARAM SpindleDirection (#629): the engine refuses 
 //    section, G99 restored after; F is scaled so the control's
 //    composite rate - X radius and Z in mm, C in degrees counted as mm,
 //    the rotary feed law of Fanuc-style controls - moves the tip at the
-//    planned mm/min along the part-frame chord. A rapid is a G01 at the
+//    planned mm/min along the part-frame chord - capped so the X/Z part
+//    of the move stays within the machine's stated feed and the C part
+//    within the C rate it states (machine.rotaries[].speeds, deg/min;
+//    unstated, C is not capped). A rapid is a G01 at the
 //    machine's stated maximum feed, never a G00: a G00 with C runs each
 //    axis on its own and follows no verified path. Arcs and cycles in a
 //    C section are refused; the first move must be a rapid (C stands
@@ -128,6 +131,7 @@ var liveOk = false;        // the C section engaged (codes stated, C on the mach
 var liveCodes = null;      // the machine's live_tool words for the open section
 var lastC = null;          // the C a C section last commanded
 var lastR = 0, lastZ = 0;  // ... and the station radius / Z it stood at
+var liveCRate = 0;         // the machine's stated C rate (deg/min), 0 = unstated
 var C_TOL = 0.005;         // mm a C-turned tip may stand off the station (lattice + milli-degree words)
 
 // ------------------------------------------------------------ helpers
@@ -395,6 +399,7 @@ function endPreamble() {
   if (coolant) block(["M9"]);
   coolant = "";
   coolantAsk = "flood";      // the next section states its own ask
+  sCss = 0;                  // and its own spindle mode: no stale G96 (#772)
   if (liveAsk) {
     if (liveOk) {
       block([liveCodes.spindleOff]);
@@ -423,7 +428,16 @@ function liveStart() {
   }
   var rs = m.rotaries || [];
   var hasC = false;
-  for (var i = 0; i < rs.length; i++) if (String(rs[i].name || "").toUpperCase() === "C") hasC = true;
+  liveCRate = 0;
+  for (var i = 0; i < rs.length; i++) {
+    if (String(rs[i].name || "").toUpperCase() !== "C") continue;
+    hasC = true;
+    // A G01 is held to the C's stated feed rate; failing that, to its
+    // stated rapid. Neither stated: the C rate is unbounded by data.
+    var sp = rs[i].speeds || {};
+    var cr = Number(sp.normal) > 0 ? Number(sp.normal) : Number(sp.rapid);
+    if (cr > 0) liveCRate = cr;
+  }
   if (rs.length > 0 && !hasC) {
     refuse(coolantWho() + "C-axis live-tool work, but the machine states no C axis among its rotaries");
     return;
@@ -475,7 +489,16 @@ function liveMove(p, rapid) {
       return;
     }
     if (!(ltrue > EPS)) { refuse("a C move that turns the part with the tip on the spindle line"); return; }
-    block(["G01", xWord(r), zWord(p.Z), "C" + fc(p.C), "F" + fm(f * lcmd / ltrue)]);
+    // Under a composite F the control drives X/Z at F * lin / lcmd and
+    // C at F * |dc| / lcmd: F is capped so neither outruns what the
+    // machine states - the linear part by its fastest stated feed, C
+    // by its stated rate (unstated: no cap the data can justify).
+    var fc_ = f * lcmd / ltrue;
+    var lin = Math.sqrt(dr * dr + dz * dz);
+    var fmax = Number(machine.feedRateMax);
+    if (fmax > 0 && lin > EPS) fc_ = Math.min(fc_, fmax * lcmd / lin);
+    if (liveCRate > 0 && Math.abs(dc) > 1e-9) fc_ = Math.min(fc_, liveCRate * lcmd / Math.abs(dc));
+    block(["G01", xWord(r), zWord(p.Z), "C" + fc(p.C), "F" + fm(fc_)]);
   }
   lastC = Number(p.C); lastR = r; lastZ = p.Z;
 }

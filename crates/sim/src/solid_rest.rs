@@ -186,7 +186,12 @@ pub(crate) fn plane_claim(
         return None;
     }
     let interior = u > EPS_B && v > EPS_B && u + v < 1.0 - EPS_B;
-    let z = (1.0 - u - v) * a.z + u * b.z + v * c.z;
+    // A level facet's crossing IS its height: the barycentric sum
+    // rounds by an ulp where the three z are equal, which a strict
+    // read at the plane itself (`above(z)` at a stock top, the field's
+    // crossing read - #780) must never see. A tilted facet keeps the
+    // sum.
+    let z = if a.z == b.z && b.z == c.z { a.z } else { (1.0 - u - v) * a.z + u * b.z + v * c.z };
     let n = (*b - *a).cross(*c - *a);
     let l2 = n.dot(n);
     if !z.is_finite() || l2 <= 0.0 || !l2.is_finite() {
@@ -338,5 +343,28 @@ mod tests {
         let _ = column_crossings(&junk, 0.0, 0.0);
         let _ = column_crossings(&[], 0.0, 0.0);
         let _ = column_crossings(&junk, f64::NAN, 0.0);
+    }
+    #[test]
+    fn a_level_facet_crosses_at_exactly_its_height() {
+        // #780: the barycentric sum rounds by an ulp on some rays
+        // ((5.25, -6.25) over a 2.0 plane did); a level facet answers
+        // its own z, bit for bit, whether the plane is on a lattice
+        // (2.0) or off it (5.1), from every ray inside it.
+        for (z0, z1) in [(-638.0, 2.0), (-6.3, 5.1), (0.0, 1e-3)] {
+            let facets = closed_box(z0, z1);
+            for i in 0..21 {
+                for j in 0..21 {
+                    let (x, y) = (-0.95 + 0.095 * f64::from(i), -0.95 + 0.095 * f64::from(j));
+                    match column_crossings(&facets, x, y) {
+                        Crossings::Paired(c) => {
+                            assert_eq!(c.len(), 2, "({x}, {y})");
+                            assert_eq!(c[0].to_bits(), z0.to_bits(), "({x}, {y}): floor {} vs {z0}", c[0]);
+                            assert_eq!(c[1].to_bits(), z1.to_bits(), "({x}, {y}): top {} vs {z1}", c[1]);
+                        }
+                        Crossings::Open { z } => panic!("({x}, {y}): open {z:?}"),
+                    }
+                }
+            }
+        }
     }
 }

@@ -137,16 +137,9 @@ pub struct ProjectFile {
     /// every earlier document means - so the default writes no key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_options: Option<PostOptionsDto>,
-    /// The document's theme (M6.1 C), same law as `post`: an absent key
-    /// is the built-in `dark` - what every earlier document wears - so
-    /// the default writes nothing. `{"named": ...}` is a built-in by
-    /// name, `{"file": path}` a user `.json` theme; landed values are
-    /// not re-validated on open (the `SelectTheme` constructor and the
-    /// shell's parse pre-step did), and one that went missing refuses
-    /// by name at apply time in the status line, never silently
-    /// reverting the look of an intact document.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub theme: Option<ThemeDto>,
+    // From v41 a `theme` key lived here (M6.1 C). Since #877 the theme is a
+    // user preference (`app::prefs`): the key is no longer written, and an
+    // older file that carries it reads cleanly - serde ignores unknown keys.
     /// The ribbon's pinned kinds (M6.2), v42+: registry indices in pin
     /// order. An absent key pins nothing - what every v41 document is,
     /// since the ribbon could not pin then. The indices ride the
@@ -174,18 +167,11 @@ pub struct ProjectFile {
     /// `skip_stops`: an absent key is one combined program.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub per_op_files: bool,
+    /// Per-operation smoothing at post (#616), additive like
+    /// `skip_stops`: an absent key is off - no smoothing words.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub smoothing: bool,
     pub entities: Vec<EntityDto>,
-}
-
-/// The file mirror of the `ThemeRef` singleton (M6.1 C), spelled like
-/// `PostDto`: a built-in name or a path, never one string standing
-/// ambiguously for both. `dark` is the default and needs no key, so a
-/// `{"named": "dark"}` is as legal as an omission - it reads the same.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum ThemeDto {
-    Named(String),
-    File(String),
 }
 
 /// The file mirror of the `PostOptions` singleton (issue #34): each
@@ -334,6 +320,14 @@ pub struct ToolDto {
     /// holder cylinder, what every older tool judged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<super::tool_body_wire::ToolBodyDto>,
+    /// #93 slice 2, additive (no version step): the tool's drawn
+    /// cutter outline, `[z, r, arc]` per point tip-up. Absent is the
+    /// outline its numbers draw - every older file. A reader that
+    /// predates it skips the key and shows that outline: display only,
+    /// nothing a generator or law reads changes. A present outline
+    /// that disagrees with the tool's numbers refuses the file by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cutter: Option<Vec<[f64; 3]>>,
     /// #630 addition, additive (no version step): the lathe tool
     /// orientation (LinuxCNC 1-9). Absent from every older file and
     /// written only when stated; absent reads as the kind's default
@@ -397,6 +391,9 @@ pub enum ToolKindDto {
     /// The touch probe (#108): an additive word in the v50 grammar - no
     /// older file names it, so no rung is needed to read one.
     Probe,
+    /// The plasma torch (#670): additive in the same way - no older
+    /// file names it.
+    Torch,
 }
 
 impl ToolDto {
@@ -415,6 +412,7 @@ impl ToolDto {
                 ToolKind::Form => ToolKindDto::Form,
                 ToolKind::Taper => ToolKindDto::Taper,
                 ToolKind::Probe => ToolKindDto::Probe,
+                ToolKind::Torch => ToolKindDto::Torch,
             },
             diameter: t.diameter,
             corner_r: t.corner_r,
@@ -438,6 +436,7 @@ impl ToolDto {
             center_cutting: t.center_cutting,
             number: None,
             body: None,
+            cutter: None,
             orientation: t.orientation,
         }
     }
@@ -457,6 +456,7 @@ impl ToolDto {
                 ToolKindDto::Form => ToolKind::Form,
                 ToolKindDto::Taper => ToolKind::Taper,
                 ToolKindDto::Probe => ToolKind::Probe,
+                ToolKindDto::Torch => ToolKind::Torch,
             },
             diameter: self.diameter,
             corner_r: self.corner_r,

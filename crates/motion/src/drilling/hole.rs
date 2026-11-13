@@ -103,8 +103,11 @@ pub enum CycleChoice {
     Drill,
     Peck,
     Tap,
+
     Bore,
     BackBore,
+    /// Explicit floating-holder intent; Auto and legacy Tap remain rigid.
+    FloatingTap,
 }
 
 /// Everything the generator needs, with heights already resolved to

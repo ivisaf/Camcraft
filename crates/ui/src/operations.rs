@@ -53,7 +53,7 @@ pub fn side_names() -> &'static [&'static str] {
 /// for a tap, a boring cycle for a bore, depth-vs-diameter otherwise),
 /// so the note next to the combo reads from the op's tool, not a guess.
 pub fn cycle_names() -> &'static [&'static str] {
-    &["Auto", "Spot", "Drill", "Peck", "Tap", "Bore", "Back bore"]
+    &["Auto", "Spot", "Drill", "Peck", "Tap (rigid)", "Bore", "Back bore", "Tap (floating holder)"]
 }
 
 /// Combo index for a cycle choice - the inverse of what picking names.
@@ -65,6 +65,7 @@ pub(crate) fn cycle_index(c: &camcraft_app::drilling::CycleChoice) -> usize {
         C::Drill => 2,
         C::Peck => 3,
         C::Tap => 4,
+        C::FloatingTap => 7,
         C::Bore => 5,
         C::BackBore => 6,
     }

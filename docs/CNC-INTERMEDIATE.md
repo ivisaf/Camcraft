@@ -37,9 +37,11 @@ committed golden is a legal post input.
 | `THREAD X.. Y.. Z.. EX.. EY.. EZ.. MAJOR.. MINOR.. LEAD.. HEIGHT.. FIRST.. MIN.. FINISH.. ANGLE.. SPRING.. PULLOUT.. HAND..` / `THREAD END` | a threading cycle (issue #34): opens / closes the span of explicit thread passes it stands for. X Y Z the cycle's start point (clearance radius, first station), EX EY EZ its end at the root, MAJOR / MINOR diameters, HEIGHT / FIRST / MIN / FINISH radial lengths and PULLOUT axial, all µm; LEAD (mm) and ANGLE (the compound infeed's included angle, degrees, 0 = radial) 6-decimal reals; SPRING the spring-pass count; HAND `right` or `left`, the hand the passes cut (#629: every helical half-turn in the span lays it). Every word required, once. The passes between are ordinary motion records - a script without `onThreadCycle` posts them unchanged |
 | `PROBE <µm>` | the measurement ask (M5.3 D): the deviation budget, in µm, that the finished part is to be probed to after this section's last cut. The number is the switch - no word when no ask - and the verdict it deserves (whether the program's own cuts can measure to it, and which pass owes a re-run) is the app post gate's, never the streams |
 | `GUARD <x> <y> <z> F <feed>` | a protected positioning move of a probe path (#174), µm: feed to the point, stop on contact and ALARM if the stylus trips on the way. Every non-rapid motion of a path carrying probing touches that is neither a touch nor its back-off posts as one (the descent to a touch's start, the travel between touches, the rise). Hook `onProbeGuard` (properties `X Y Z Feed`, `StartX/Y/Z`); a script without it is refused by name, once per operation - a plain feed would drive the stylus into an unexpected obstacle |
+| `PLASMA KERF<µm> [CONTROL] [PIERCE<µm>] [CUTH<µm>] [DELAY<ms>] [AUTOFEED] [REVERSED]` | a plasma section's header (#671), before its `SECTION`: the `.cl` v5 `; PLASMA` record without its `; ` (see "Plasma records" below, which also gives each word). Its properties hold until `ENDSECTION` |
+| `TORCH ON C<id> OUTER\|INNER\|OPEN [PARENT<id>] [SMALL<f×1000>]` / `TORCH OFF C<id>` | the torch struck before the next motion record / put out after the previous one (#671): the `.cl` v5 `; TORCH` records without their `; ` |
 | `START X <i> Y <i> Z <i>` / `END` | legacy `.cl` position lines: consumed silently (END ends the record span) |
 
-`CYCLE` TYPE ∈ SPOT DRILL PECK DEEP TAP BORE BACKBORE. Word meanings
+`CYCLE` TYPE ∈ SPOT DRILL PECK DEEP TAP FLOATINGTAP BORE BACKBORE. Word meanings
 match the `.cl` v3 `; CYCLE` marker the M1.6 goldens use, and one
 parser reads both: X Y center, Z (or `BZ`) bottom, R (or `RZ`)
 retract/feed plane, `ENTRY` entry plane, Q (or `PECK`) peck, P (or
@@ -52,6 +54,16 @@ position in the file). A bare number
 separated key (`X:1000` / `X=1000`) are the same word to the parser,
 so the canonical spaced writer, the compact joined form, and the
 legacy positional form all round-trip.
+
+`FLOATINGTAP` is the appended stream choice for tapping with an
+explicitly selected floating holder; legacy `TAP` remains rigid. The
+operation choice persists as `floating_tap` (legacy `tap` stays rigid).
+When the engine publishes cycle properties to a script, both tapping
+cycles use `CycleType = "TAP"`; `TappingMode` is `"rigid"` for `TAP`
+and `"floating"` only for `FLOATINGTAP`. The Heidenhain manifest declares
+`floatingTapping = true`; when a script lacks that capability, the engine
+counts a refusal for floating-holder tapping. A machine's lack of rigid-
+tapping capability never turns a rigid request into floating mode.
 
 ## Rotary address words (stage D)
 
@@ -100,9 +112,14 @@ behavior only):
 | `From` `To` | the `PART TRANSFER` stations, 1-based (present only on transfer events) |
 | `Tolerance` | the `PROBE` ask's deviation budget in mm (present only on probe events; the µm lattice word `PROBE <µm>` is its stream spelling) |
 | `CircularDirection` | `CW` / `CCW` (arcs) |
-| `CycleType` | the `CYCLE` TYPE token (cycles) |
+| `CycleType` | cycle intent delivered to hooks: `SPOT` `DRILL` `PECK` `DEEP` `TAP` `BORE` `BACKBORE`; `FLOATINGTAP` is normalized to `TAP` here and distinguished by `TappingMode` |
+| `TappingMode` | `rigid` for legacy `TAP`; `floating` only for the explicit `FLOATINGTAP` stream kind |
 | `EntryZ` `Q` `P` `FeedRate` | cycle entry plane, peck mm, dwell s, cutting feed mm/min (`null` for legacy markers) |
+| `ChainFeedRate` | optional-valued engine property: feed on the first subsequent non-rapid move in the expanded cycle chain, mm/min; `null` if absent; legacy posts may use it when cycle `FeedRate` is `null` |
+| `ChainBottomZ` | optional-valued engine property: lowest Z among subsequent non-rapid cycle-chain moves, mm; `null` when no cutting move follows; a native-cycle post validates its bottom against this value when present |
 | `LinearMovementIncludeOpts` | `{L:[1]}` on plunges (the skip-the-rapid convention) |
+| `PlasmaKerf` `PlasmaCompensation` `PierceHeight` `CutHeight` `PierceDelay` `PlasmaFeed` `PlasmaReversed` | the `PLASMA` header (#671), for the section: kerf mm; `control` (G41/G42 spans follow) / `computer`; pierce and cut height mm and pierce delay s - each ABSENT when unstated (the controller's AutoFS decides); `auto` (the lit moves carry no feed) / `stated`; the reversed cut direction. Cleared at `ENDSECTION` |
+| `Contour` `ContourRole` `ParentContour` `SmallHole` | a `TORCH` record (#671): the contour id; on `onTorchOn` also `outer` / `inner` / `open`, the enclosing contour's id (absent = none) and the small-hole feed factor (absent = not small) |
 
 ## The hook contract
 
@@ -165,7 +182,16 @@ fires per `COMP` record (M13.11; `side` is `"left"`, `"right"` or
 `"off"`, `properties.CompensationRadius` the register's radius in mm)
 — and a script that does not define it is REFUSED (counted warning)
 the moment a `COMP` record arrives, since the records after it are a
-part contour no centre-path post may write. `onThreadCycle()` /
+part contour no centre-path post may write. `onPlasma()` fires per `PLASMA`
+header and `onTorchOn()` / `onTorchOff()` per `TORCH` record (#671;
+lifecycle, `onCommand` never sees them). The engine keeps the torch
+law and refuses by name, as counted warnings: a `TORCH` with no
+`PLASMA` header in force, a second header in one section, an `ON`
+while a contour is lit, an `OFF` naming another contour or none, a
+rapid while lit, a section (or stream) that ends lit - and a script
+that does not define both torch hooks, the moment a header arrives
+(a cutting post would write the cut with its spindle words and no
+torch). `onThreadCycle()` /
 `onThreadCycleEnd()` fire per `THREAD` / `THREAD END` (issue #34;
 lifecycle, `onCommand` never sees them): properties `X Y Z`, `EndX
 EndY EndZ`, `MajorDiameter`, `MinorDiameter`, `Lead`, `ThreadHeight`,
@@ -207,3 +233,42 @@ reads as the program, not as the stream echoed back. `post --trace
 <file>` writes the excerpt (each block as a `; [record N] label`
 header over its lines) and the viewer shows the same blocks beside
 the listing; clicking a block centers its first line.
+
+## Plasma records (`.cl` v5, #670)
+
+A plasma profile's path (`OpType::PlasmaProfile`, the torch on a
+plasma table) carries `Toolpath::plasma` ([`cl::PlasmaCut`]): the kerf
+the moves were offset by, the torch on / off per contour, each
+contour's role and the contour it lies in. The `.cl` dump writes it as
+comment-prefixed records (`cl::text::to_text` / `from_text`, and the
+golden writer `common::gen_to_cltext`, byte for byte), so the header
+reads `; HSMW-CL v5` and a reader that knows only the legacy grammar
+skips them (the post's stream parser reads them since #671). The moves stay the
+torch-centre truth (every lit move stands kerf / 2 off the part on the
+waste side, or on the centre line of an open run); the records say
+what the moves alone cannot. Pinned by
+`crates/app/tests/golden/plasma_plate_with_holes.cl`.
+
+| line | meaning |
+|---|---|
+| `; PLASMA KERF<µm> [CONTROL] [PIERCE<µm>] [CUTH<µm>] [DELAY<ms>] [AUTOFEED] [REVERSED]` | the header, once, right after `START`. `KERF` the kerf width (the torch tool's diameter or the op's override) - required. `CONTROL`: the control compensates (the G41/G42 spans ride the path's comps - see `COMP` above - with straight engage / cancel leads at least the kerf radius long, Tormach's PathPilot rule); absent: the offset is in the moves. `PIERCE` / `CUTH` the pierce and cut heights above the plate, `DELAY` the pierce delay - each present only when the op states it (absent = the controller's AutoFS decides). `AUTOFEED`: the op states no feed - the lit moves carry no `F`, the controller's material table feeds. `REVERSED`: the cut direction was overridden (outer contours counter-clockwise, holes clockwise; the default is outer CW / holes CCW, Hypertherm's square edge on the part) |
+| `; TORCH ON C<id> OUTER\|INNER\|OPEN [PARENT<id>] [SMALL<f×1000>]` | the torch is struck before the next motion record (the pierce: the tool already stands at the cut plane over the pierce point; the controller's G15/G16 own the Z). `C<id>` the contour's id - ids run in CUT ORDER from 0. `OUTER` a part's outer edge (waste outside), `INNER` a hole (waste inside), `OPEN` an open run cut on its centre line. `PARENT<id>` the closed contour it lies inside (a hole names its part's outline; an island part inside a hole names the hole; absent = none). `SMALL<f>` the small-hole rule cut it (LinuxCNC Plasma Primer §13): a straight lead-in from near the centre, no lead-out, an optional overburn, the cut feed times `f/1000` (650 = 65 %) |
+| `; TORCH OFF C<id>` | the torch goes out after the previous motion record (the lead-out's end, or a small hole's overburn end); names the same id as its `ON` |
+
+Laws (the reader refuses by line, `PlasmaCut::is_sane`): one header
+before any `TORCH`; spans never nest or overlap and appear in cut
+order; every lit record is a feed or arc, never a rapid; ids are
+unique and every `PARENT` names a contour of the path; a torch never
+put out is an error. Cut order is the generator's law and the
+records make it checkable: every contour's `OFF` comes before its
+parent's `ON` - an island before its hole, a hole before the outline
+that frees the part.
+
+The `.cnc` stream carries the same records without the `; ` (#671):
+`dump` writes the header before the section's `SECTION` and each
+torch span around its records (an `ON` ahead of a G41/G42 engage, an
+`OFF` after the cancel's lead-out), and the stream reader takes BOTH
+spellings - so a `.cl` plasma golden posts as it stands. The plasma
+post (`assets/posts/tormach-plasma.cps`, `posting::PLASMA_POSTS`)
+voices them in PathPilot's words (`M200`, `M207`/`M208`/`M209`,
+`G15`/`G16`, `M205`, `G30`; UM10720 §6-7).

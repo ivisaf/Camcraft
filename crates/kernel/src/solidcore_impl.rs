@@ -135,6 +135,10 @@ impl Kernel for SolidcoreKernel {
         crate::solidcore_blend::blend_edges(self, s, picks, radius, kind)
     }
 
+    fn heal(&mut self, s: Brep) -> Result<Brep, KernelError> {
+        crate::solidcore_import::heal(self, s)
+    }
+
     /// Guards around the port's offset, each one answering a bench finding
     /// (see tests/corrupt_input.rs `KNOWN_PORT_FINDINGS`):
     /// - `merge_results: true` - with SMLib's default `false`, a plain box

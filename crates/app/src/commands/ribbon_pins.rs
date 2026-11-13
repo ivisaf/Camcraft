@@ -1,9 +1,9 @@
 //! SetRibbonPins: pin or unpin operation kinds on the ribbon (issue #143).
 //!
 //! Pins are saved in the project file, so changing them changes the
-//! document: it goes through the history like `SetTheme`, can be undone,
-//! and counts as an unsaved change. The command writes only the
-//! `RibbonPins` singleton (through `ribbon::pinned_set`) and its inverse
+//! document: it goes through the history (as the theme did before
+//! #877), can be undone, and counts as an unsaved change. The command
+//! writes only the `RibbonPins` singleton (through `ribbon::pinned_set`) and its inverse
 //! writes the previous list back. Provenance: our own command, mirroring
 //! our own `theme.rs`; specced from issue #143 and AGENTS.md's
 //! "Everything Is a Command".

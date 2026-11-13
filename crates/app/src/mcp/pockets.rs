@@ -5,13 +5,11 @@
 //! Provenance: our own tool surface over `recognize` (this repo's M13.6
 //! design); no vendor material consulted.
 
-use super::edit::seed;
 use super::pick::{feature_id, req_model};
 use super::tools::{opt_str, req_str};
 use crate::commands::CreateOperation;
 use crate::geo2d::Point2;
-use crate::model;
-use crate::operation::{self, FeatureSel, KindInfo};
+use crate::operation::{FeatureSel, KindInfo};
 use crate::recognize::{self, Pocket, PocketKind, SlotEnd};
 use crate::script::{fnum, Env};
 
@@ -84,23 +82,10 @@ pub(super) fn detect_pockets(env: &mut Env, a: &Map<String, Value>) -> Result<Va
     };
     let tool = tool.ok_or("\"tool\" is required with \"create\"")?;
     let p = found.get(i).ok_or_else(|| format!("no recognised feature {i}"))?;
-    let kind = recognize::op_kind_of(p);
-    let mut base = seed(kind as usize);
-    if let Some(t) = model::find_by_name(&env.world, tool).and_then(|e| model::tool_of(&env.world, &e)) {
-        operation::seed_helix_for_tool(&mut base, t.diameter);
-    }
-    let (src, params) = recognize::operation_for(p, &base)?;
-    let label = KindInfo::ALL.get(kind as usize).map_or("Operation", |k| k.label);
-    let op = match op_name {
-        Some(n) => n.to_owned(),
-        None => (1..)
-            .map(|n| format!("{label}{n}"))
-            .find(|c| model::find_by_name(&env.world, c).is_none())
-            .unwrap_or_else(|| label.to_owned()),
-    };
-    let cmd = CreateOperation::new(&env.world, &op, tool, src, params).map_err(|e| e.to_string())?;
+    let plan = recognize::plan_operation(&env.world, p, tool, op_name)?;
+    let cmd = CreateOperation::new(&env.world, &plan.name, tool, plan.src, plan.params).map_err(|e| e.to_string())?;
     env.history.execute(&env.world, cmd);
-    out["created"] = json!({ "operation": op, "kind": label, "feature": i, "status": "never" });
+    out["created"] = json!({ "operation": plan.name, "kind": plan.label, "feature": i, "status": "never" });
     Ok(out)
 }
 

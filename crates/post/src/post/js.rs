@@ -147,6 +147,10 @@ pub const HOOKS: &[&str] = &[
     "onProbeRetreat",
     "onProbeGuard",
     "onProbeResult",
+    // #671: the plasma header and the torch spans.
+    "onPlasma",
+    "onTorchOn",
+    "onTorchOff",
     "onComment",
     "onClose",
 ];
@@ -166,6 +170,8 @@ pub struct Script {
     /// `PARAM AfterOperation`. Without it a section asking a stop or a
     /// trip home is refused by name - the script would run straight on.
     after_modes: bool,
+    /// Explicit floating-holder tapping, rather than legacy rigid TAP (#51).
+    floating_tapping: bool,
     /// The `axisInversion = true` manifest flag (#374): the script's
     /// output is verified (goldens + the equivalence test) on the
     /// engine's mirrored stream for an inverted X / Y axis. Without it a
@@ -199,6 +205,7 @@ impl Script {
             coolant_modes: false,
             live_tooling: false,
             after_modes: false,
+            floating_tapping: false,
             axis_inversion: false,
             probe_axis_inversion: false,
             thread_hands: false,
@@ -222,6 +229,10 @@ impl Script {
             .unwrap_or(false);
         s.after_modes = s
             .eval("typeof afterModes !== \"undefined\" && afterModes === true")
+            .map(|v| is_true(&v))
+            .unwrap_or(false);
+        s.floating_tapping = s
+            .eval("typeof floatingTapping !== \"undefined\" && floatingTapping === true")
             .map(|v| is_true(&v))
             .unwrap_or(false);
         s.thread_hands = s
@@ -333,6 +344,10 @@ impl Script {
     /// `PARAM AfterOperation` and writes the stop or home (#110).
     pub fn reads_after_operation(&self) -> bool {
         self.after_modes
+    }
+
+    pub fn voices_floating_tapping(&self) -> bool {
+        self.floating_tapping
     }
 
     /// True when the script declares `axisInversion = true` - verified

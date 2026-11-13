@@ -75,6 +75,10 @@ pub struct GenJob {
     pub(super) machine_rotaries: Option<(String, Vec<crate::machine::AxisLimits>)>,
     pub(super) spindle: Option<(f64, f64)>,
     pub(super) fixtures: Vec<crate::fixture::FixtureBox>,
+    /// `fixtures`' names, index for index (#339 slice 5 refusals).
+    pub(super) fixture_names: Vec<String>,
+    /// The highest world Z the tip reaches (WCS origin + stated Z top).
+    pub(super) z_ceiling: Option<f64>,
     /// `fixtures` split by whether the steel turns with the part
     /// (M13.8 (2)): `.0` rides the rotary, `.1` stands still (the
     /// declared-fixed models, then the machine table) - the post gate's
@@ -210,7 +214,7 @@ pub fn collect_job(world: &World, op: &Operation, op_name: &str) -> Result<GenJo
         // answer.
         (params, SrcRef::Selection(items))
             if selection_drives_region(params)
-                && !matches!(params, OpParams::Contour { .. }) =>
+                && !matches!(params, OpParams::Contour { .. } | OpParams::PlasmaProfile(_)) =>
         {
             Some(selection_region(world, setup, items, params, &op.area))
         }
@@ -219,7 +223,9 @@ pub fn collect_job(world: &World, op: &Operation, op_name: &str) -> Result<GenJo
         (params, src) => whole_model_pocket(world, setup, src, params, frame.as_ref()),
     };
     let contour_sel = match (&op.params, &op.src) {
-        (OpParams::Contour { .. }, SrcRef::Selection(items)) => {
+        // The plasma cut reads its picks the contour's way (#670):
+        // closed rings AND open runs, each cut as picked.
+        (OpParams::Contour { .. } | OpParams::PlasmaProfile(_), SrcRef::Selection(items)) => {
             Some(selection_geometry_impl(world, setup, items, &op.params, None))
         }
         _ => None,
@@ -298,7 +304,7 @@ pub fn collect_job(world: &World, op: &Operation, op_name: &str) -> Result<GenJo
         None
     };
     let is_mill = machine_kind == crate::machine::Kind::Mill;
-    let fixtures = crate::fixture::boxes_for(world, setup);
+    let (fixture_names, fixtures) = crate::fixture::named_boxes_for(world, setup).into_iter().unzip();
     let workholding = crate::fixture::workholding_for(world, setup);
     let fixture_meshes = crate::fixture::meshes_for(world, setup);
     let rotary_axis = crate::fixture::rotary_axis_of(world, op);
@@ -307,6 +313,11 @@ pub fn collect_job(world: &World, op: &Operation, op_name: &str) -> Result<GenJo
         .as_ref()
         .and_then(|m| m.spindle_d.zip(m.spindle_len))
         .map(|(d, l)| (d * 0.5, l));
+    let z_ceiling = mounted
+        .as_ref()
+        .and_then(|m| m.axis(2))
+        .and_then(crate::machine::AxisLimits::program_travel)
+        .map(|(lo, hi)| wcs_origin[2] + lo.max(hi));
     let machine_rotaries = mounted.map(|m| {
         let rot: Vec<_> = m.axes.iter().filter(|a| a.rotary).cloned().collect();
         (m.model, rot)
@@ -339,6 +350,8 @@ pub fn collect_job(world: &World, op: &Operation, op_name: &str) -> Result<GenJo
         machine_rotaries,
         spindle,
         fixtures,
+        fixture_names,
+        z_ceiling,
         workholding,
         fixture_meshes,
         rotary_axis,

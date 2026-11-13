@@ -5,8 +5,11 @@ use crate::cl::{lattice, MoveKind, PathBuilder};
 use crate::geo2d::Point2;
 use crate::geometry::Point3;
 
-use super::contour::{Lead, unit};
+use super::contour::unit;
 use super::ring::dist;
+// The lead geometry moved to `arc_leads` (#689, the 400-line law); its
+// importers keep reaching it here.
+pub(super) use super::arc_leads::{lead_in, lead_out};
 /// One piece of tool motion: a straight feed walk through the listed
 /// points (exactly how generators have always walked polylines), or one
 /// arc move ending at `to` about `center`. A [`Seg`] list describes a
@@ -23,6 +26,17 @@ pub enum Seg {
 /// An arc may only replace a polyline if both sit within this of each
 /// other - the same budget a chord's gouge allowance already spends.
 pub const ARC_FIT_TOL: f64 = 0.01;
+
+/// The share of the fit tolerance a vertex may stand off the fitted
+/// circle (#689). A vertex off the circle means the arc passes that far
+/// on the other side of a point the plan verified - toward the part as
+/// often as away - and the verifier forgives the program exactly `tol`
+/// against a mesh whose own chords already spend part of it. Half keeps
+/// the fit's error toward the part inside the gouge verdict with the
+/// other half left for the model's chords; the chord-hug test (the arc's
+/// bow off its own chords) keeps the full `tol`, since an honest
+/// tessellation's own sagitta is what that test measures.
+pub const ARC_FIT_VERTEX_SHARE: f64 = 0.5;
 
 /// Longest vertex run a single candidate arc may span: bounds the
 /// greedy walk on pathological input (no honest tessellation needs it).
@@ -95,9 +109,11 @@ pub(super) fn walk_tangent(segs: &[Seg], poly: &[Point2], front: bool) -> Point2
 /// Replace maximal arc-fittable runs of a polyline with arc moves,
 /// keeping everything else point-for-point.
 ///
-/// A run earns arcs only if both directions agree within `tol`: every
-/// vertex lies within `tol` of one circle (the arc is no lie about the
-/// tessellation), and every chord lies within `tol` of that circle's
+/// A run earns arcs only if both directions agree: every vertex lies
+/// within [`ARC_FIT_VERTEX_SHARE`] of `tol` of one circle (the arc is no
+/// lie about the tessellation, and its error toward the part leaves the
+/// model's own chords room inside the gouge verdict - #689), and every
+/// chord lies within `tol` of that circle's
 /// arc (the arc is no surprise against the verified polygon) - so
 /// trading chords for the arc moves the tool nowhere the plan didn't
 /// already tolerate. Near-straight runs (all deviations within `tol` of
@@ -220,16 +236,20 @@ pub(super) fn arc_over(run: &[Point2], tol: f64) -> Over {
     // A run closing a full circle has an end chord of zero length - no
     // usable anchor at `b`. Second anchor: the vertex farthest from the
     // a-pivot line, which for an honest tessellation is a quarter turn
-    // out. Either anchor pair defines the circle - and the turning
-    // direction, from the same triple it was fitted on; the validation
-    // loops are the actual judges.
-    let (c, r, ccw) = match circle3(a, pivot, b) {
-        Some((c, r)) => (
+    // out. Either anchor pair defines the circle; an open run's turning
+    // direction comes from the triple it was fitted on, a closing ring's
+    // from its own signed area. The validation loops are the judges.
+    // A run whose ends meet within `tol` is a closing ring, even when its
+    // seam is a few ULP shy of exact: the end triple there is a
+    // near-degenerate circle (#689), so it takes the anchor branch.
+    let closing = dist(a, b) <= tol;
+    let (c, r, ccw) = match (closing, circle3(a, pivot, b)) {
+        (false, Some((c, r))) => (
             c,
             r,
             ((pivot.x - a.x) * (b.y - pivot.y) - (pivot.y - a.y) * (b.x - pivot.x)) > 0.0,
         ),
-        None if dist(a, b) <= tol => {
+        (true, _) => {
             let mut second = None;
             let mut sd = 0.0;
             for p in &run[1..] {
@@ -245,22 +265,26 @@ pub(super) fn arc_over(run: &[Point2], tol: f64) -> Over {
             let Some((c, r)) = circle3(a, pivot, anchor) else {
                 return Over::Fail;
             };
-            (
-                c,
-                r,
-                ((pivot.x - a.x) * (anchor.y - pivot.y) - (pivot.y - a.y) * (anchor.x - pivot.x))
-                    > 0.0,
-            )
+            // The turning direction of a closing ring is its own signed
+            // area, never the anchor triple: the two quarter-turn
+            // vertices stand equally far off the a-pivot line, and when
+            // the one picked lies BEFORE the pivot in travel the triple
+            // reads the ring backwards - the fit then failed on its first
+            // step and the ring's last few degrees walked as a chord the
+            // lead-out crossed (#689, the Ø25 hole on Milling-test.step).
+            (c, r, signed_area2(run) > 0.0)
         }
-        None => return Over::Fail,
+        (false, None) => return Over::Fail,
     };
     if !r.is_finite() || r <= tol {
         return Over::Fail;
     }
-    // Direction one: vertices on the circle.
+    // Direction one: vertices on the circle, within the vertex share of
+    // `tol` (#689) - see ARC_FIT_VERTEX_SHARE.
+    let vtol = tol * ARC_FIT_VERTEX_SHARE;
     for p in run {
         let d = (((p.x - c.x).powi(2) + (p.y - c.y).powi(2)).sqrt() - r).abs();
-        if d > tol {
+        if d > vtol {
             return Over::Fail;
         }
     }
@@ -285,6 +309,18 @@ pub(super) fn arc_over(run: &[Point2], tol: f64) -> Over {
         return Over::Fail;
     }
     Over::Fit(c, ccw, total)
+}
+
+/// Twice the signed area the closed walk `run` encloses (shoelace):
+/// positive for a counter-clockwise ring.
+fn signed_area2(run: &[Point2]) -> f64 {
+    let n = run.len();
+    (0..n)
+        .map(|i| {
+            let (p, q) = (run[i], run[(i + 1) % n]);
+            p.x * q.y - q.x * p.y
+        })
+        .sum()
 }
 
 /// Distance from `p` to segment `a`-`b`.
@@ -321,81 +357,4 @@ pub(super) fn circle3(a: Point2, b: Point2, c: Point2) -> Option<(Point2, f64)> 
         return None;
     }
     Some((o, r))
-}
-
-/// (plunge point, segments from it onto the path, ending exactly at
-/// `s`).
-pub(super) fn lead_in(s: Point2, t: Point2, air: Point2, lead: Lead) -> (Point2, Vec<Seg>) {
-    match lead {
-        Lead::None => (s, Vec::new()),
-        // M11.3 C: straight in along the air normal, square to the wall.
-        Lead::Perpendicular { length } => (
-            Point2::new(s.x + air.x * length, s.y + air.y * length),
-            vec![Seg::Line(vec![s])],
-        ),
-        Lead::Linear { length } => (
-            Point2::new(s.x - t.x * length, s.y - t.y * length),
-            vec![Seg::Line(vec![s])],
-        ),
-        Lead::Arc { radius } => {
-            let o = Point2::new(s.x + air.x * radius, s.y + air.y * radius);
-            let e = Point2::new(
-                s.x + (air.x - t.x) * radius,
-                s.y + (air.y - t.y) * radius,
-            );
-            // Quarter arc e -> s about o: ccw iff s bears left of the
-            // start radius. The chord error at p.tolerance only appears
-            // when something downstream flattens the move.
-            let ccw = ((e.x - o.x) * (s.y - o.y) - (e.y - o.y) * (s.x - o.x)) > 0.0;
-            (e, vec![Seg::Arc { center: o, ccw, to: s }])
-        }
-        Lead::Tangential { radius } => {
-            // Semicircle e -> s about o = s + air*radius, with the plunge
-            // point e = s + 2*radius*air: e - o and s - o are antiparallel,
-            // so the quarter arm's radius-vector cross would vanish. The
-            // surviving law is its limit: arrive at s moving along +t means
-            // turning ccw iff air bears left of t - cross(air, t) < 0.
-            // air_side puts climb's air right of t: cw; conventional ccw
-            // (arcs.rs and machining2d.rs derive this from the law, never
-            // hardcode it).
-            let o = Point2::new(s.x + air.x * radius, s.y + air.y * radius);
-            let e = Point2::new(s.x + air.x * 2.0 * radius, s.y + air.y * 2.0 * radius);
-            let ccw = (air.x * t.y - air.y * t.x) < 0.0;
-            (e, vec![Seg::Arc { center: o, ccw, to: s }])
-        }
-    }
-}
-
-/// Segments carrying the tool off the path end (not including it).
-pub(super) fn lead_out(e: Point2, t: Point2, air: Point2, lead: Lead) -> Vec<Seg> {
-    match lead {
-        Lead::None => Vec::new(),
-        Lead::Perpendicular { length } => {
-            vec![Seg::Line(vec![Point2::new(e.x + air.x * length, e.y + air.y * length)])]
-        }
-        Lead::Linear { length } => vec![Seg::Line(vec![Point2::new(
-            e.x + t.x * length,
-            e.y + t.y * length,
-        )])],
-        Lead::Arc { radius } => {
-            let o = Point2::new(e.x + air.x * radius, e.y + air.y * radius);
-            let q = Point2::new(
-                e.x + (air.x + t.x) * radius,
-                e.y + (air.y + t.y) * radius,
-            );
-            let ccw = ((e.x - o.x) * (q.y - o.y) - (e.y - o.y) * (q.x - o.x)) > 0.0;
-            vec![Seg::Arc { center: o, ccw, to: q }]
-        }
-        Lead::Tangential { radius } => {
-            // The mirror of the lead-in half arc: leave the path end
-            // overruning tangentially, sweep the semicircle out through
-            // air, and stand off the wall 2*radius on the normal, moving
-            // parallel to where the cut was going. Same sign law at the
-            // tangent point as the lead-in: climb cw, conventional ccw.
-            let o = Point2::new(e.x + air.x * radius, e.y + air.y * radius);
-            let q = Point2::new(e.x + air.x * 2.0 * radius, e.y + air.y * 2.0 * radius);
-            let ccw = (air.x * t.y - air.y * t.x) < 0.0;
-            vec![Seg::Arc { center: o, ccw, to: q }]
-        }
-    }
 }

@@ -200,6 +200,26 @@ impl ToolCsysReport {
             names.join(", ")
         ))
     }
+
+    /// Attempt automatic tool body alignment from the file's ISO 13399
+    /// coordinate systems (#370): returns the unit tool axis (pointing from
+    /// the cutting point toward the spindle) and the model origin's height
+    /// above the tip.
+    ///
+    /// Requires a valid, unambiguous CIP (coordinate system in process, at
+    /// the cutting part - ISO/TS 13399-303 §3.3); its origin is the cutting
+    /// point and its unit z is the tool axis. When CIP is absent, ambiguous,
+    /// or degenerate, returns `Err` with the named reason to fall back to
+    /// numeric placement.
+    pub fn align_tool_body(&self) -> Result<([f64; 3], f64), String> {
+        let cip = self.find(CsysRole::InProcess).map_err(|e| self.none_found().unwrap_or(e))?;
+        let axis = cip.z;
+        let offset = -dot(cip.origin, axis);
+        if !offset.is_finite() {
+            return Err("calculated tip offset is not finite".into());
+        }
+        Ok((axis, offset))
+    }
 }
 
 /// Read every named coordinate system of a STEP file. `Err` only when

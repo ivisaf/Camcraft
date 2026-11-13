@@ -860,6 +860,47 @@ impl OpParams {
                 });
                 wt(h, *tilt);
             }
+            OpParams::TrochoidalSlot {
+                a,
+                b,
+                width,
+                loop_width,
+                step,
+                max_engagement,
+                ret,
+                smoothing,
+                stock_to_leave,
+                clearance_z,
+                retract_z,
+                top_z,
+                bottom_z,
+                stepdown,
+                feed,
+                return_feed,
+                plunge_feed,
+                climb,
+            } => {
+                wp2(h, *a);
+                wp2(h, *b);
+                for v in [*width, loop_width.unwrap_or(-1.0), *step, *max_engagement, *smoothing, *stock_to_leave] {
+                    w(h, v);
+                }
+                match ret {
+                    crate::machining2d::TrochoidReturn::Microlift { height } => {
+                        h.write_u8(0);
+                        w(h, *height);
+                    }
+                    crate::machining2d::TrochoidReturn::Retract => h.write_u8(1),
+                }
+                wh(h, *clearance_z);
+                wh_opt(h, *retract_z);
+                wh(h, *top_z);
+                wh(h, *bottom_z);
+                for v in [*stepdown, *feed, *return_feed, *plunge_feed] {
+                    w(h, v);
+                }
+                h.write_u8(u8::from(*climb));
+            }
             OpParams::Trace {
                 clearance_z,
                 retract_z,
@@ -1004,6 +1045,7 @@ impl OpParams {
                     CycleChoice::Drill => 2,
                     CycleChoice::Peck => 3,
                     CycleChoice::Tap => 4,
+                    CycleChoice::FloatingTap => 7,
                     CycleChoice::Bore => 5,
                     CycleChoice::BackBore => 6,
                 });
@@ -1386,6 +1428,27 @@ impl OpParams {
                     w(h, v);
                 }
                 h.write_u8(set_wcs.unwrap_or(0xff));
+            }
+            // The plasma profile (#670): every stored number, the
+            // optional ones with a presence byte.
+            OpParams::PlasmaProfile(p) => {
+                wh(h, p.clearance_z);
+                wh(h, p.top_z);
+                wh(h, p.bottom_z);
+                h.write_u8(u8::from(p.comp == super::PlasmaComp::Control));
+                h.write_u8(u8::from(p.reversed));
+                for v in [p.lead_in, p.lead_out, p.small_hole_dia, p.small_hole_feed, p.overburn] {
+                    w(h, v);
+                }
+                for v in [p.kerf, p.feed, p.pierce_height, p.cut_height, p.pierce_delay] {
+                    match v {
+                        Some(x) => {
+                            h.write_u8(1);
+                            w(h, x);
+                        }
+                        None => h.write_u8(0),
+                    }
+                }
             }
             OpParams::Thread {
                 clearance_z,

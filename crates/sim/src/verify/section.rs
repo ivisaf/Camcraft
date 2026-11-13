@@ -1,6 +1,7 @@
 //! Law (b), the section/tangency gouge law d(center, boundary) >= r - leave - tol, and the wiring of the solid law (b2) it shares a domain with - the shop practice of holding the cutter radius to the finish wall (machine-tool handbooks) on our own section model (split from `engine.rs` by M13.7; structure only).
 
-use super::laws::{dist2_segs, law_points, proper_cross};
+use super::arc_wall::Trace;
+use super::laws::{dist2_segs, law_points};
 use super::rest::Rest;
 use super::types::{Mode, VerifyContext, Warning};
 
@@ -10,6 +11,15 @@ use crate::geo2d::Point2;
 /// Sample spacing of the solid law (b2) along each move, mm - the
 /// operation layer's containment step.
 const SOLID_STEP: f64 = 0.25;
+
+/// The share of the gouge tolerance an arc move is read to by this law
+/// (#689). The law reads an arc by its inscribed chords: at the full
+/// tolerance those stand up to `tol` off the arc the machine cuts -
+/// toward the centre, so a nominal arc round a convex wall read as a
+/// gouge, and away from it, so an arc bowing into a concave wall hid up
+/// to `tol` of real gouge. A quarter keeps the reading's own error to a
+/// quarter of the verdict both ways; the verdict itself is unchanged.
+const ARC_READ_SHARE: f64 = 0.25;
 
 /// Whether laws (b) and (b2) speak in `mode`.
 ///
@@ -97,16 +107,12 @@ pub(super) fn tangency(
                 chords.iter().any(|&(a, b)| dist2_segs(a, b, p, q) < floor * floor)
             })
         });
+        // The whole-move wall reading (#43, arcs since #905): every
+        // straight move and XY arc along its whole trace, so a wall
+        // corner between two of an arc's joints is measured, not missed.
         let walled = !gouged
             && cx.mode == Mode::Boundary
-            && m.arc.is_none()
-            && wall_gouge(
-                (Point2::new(m.from.x, m.from.y), Point2::new(m.to.x, m.to.y)),
-                cx.region,
-                section.as_ref(),
-                cx.model.is_some(),
-                floor,
-            );
+            && Trace::of(m).is_some_and(|t| wall_gouge(&t, cx.region, section.as_ref(), cx.model.is_some(), floor));
         if gouged || walled {
             warns.push(Warning::Gouge { at: i });
         }
@@ -118,8 +124,9 @@ pub(super) fn tangency(
 /// feature the tolerance could care about.
 const WALL_PROBE: f64 = 0.05;
 
-/// The Boundary-mode whole-chord reading (issue #43): a straight move
-/// measured along its whole length against the region's WALLS only.
+/// The Boundary-mode whole-move reading (issue #43): a straight move, or
+/// an XY arc on its true circle (#905, [`super::arc_wall`]), measured
+/// along its whole length against the region's WALLS only.
 /// The law points cannot see a G1 chorded across a convex corner of the
 /// wall with both ends `r` off it; a whole-chord reading of EVERY edge
 /// convicts a Face's rows, which cross the face's OPEN rim by design.
@@ -135,13 +142,13 @@ const WALL_PROBE: f64 = 0.05;
 ///   Face row; a wall is never crossed by a legitimate move), and only
 ///   a move that crosses none is read against the region's edges.
 fn wall_gouge(
-    (a, b): (Point2, Point2),
+    trace: &Trace,
     region: &crate::geo2d::Region,
     section: Option<&crate::geo2d::Region>,
     has_model: bool,
     floor: f64,
 ) -> bool {
-    let near = |(p, q): (Point2, Point2)| dist2_segs(a, b, p, q) < floor * floor;
+    let near = |(p, q): (Point2, Point2)| trace.near(p, q, floor);
     if section.is_some_and(|s| edges(s).any(near)) {
         return true;
     }
@@ -160,7 +167,7 @@ fn wall_gouge(
         };
         edges(region).any(|e| walled(e) && near(e))
     } else {
-        !edges(region).any(|(p, q)| proper_cross(a, b, p, q)) && edges(region).any(near)
+        !edges(region).any(|(p, q)| trace.crosses(p, q)) && edges(region).any(near)
     }
 }
 
@@ -180,16 +187,34 @@ fn edges(r: &crate::geo2d::Region) -> impl Iterator<Item = (Point2, Point2)> + '
 /// block corner sink 1.46 mm into it unconvicted. `Mode::Boundary` keeps the
 /// law points as zero-length chords: a Face's rows run across the
 /// face's open edge by design, which a whole-chord reading of every
-/// edge would convict; its straight moves answer to the WALL edges
-/// along their whole length instead ([`wall_gouge`], issue #43).
+/// edge would convict; its straight moves and XY arcs answer to the
+/// WALL edges along their whole length instead ([`wall_gouge`], issues
+/// #43 and #905).
 ///
 /// The whole-chord reading covers only the stretch of the move that is
 /// below `wall_top` (the stock top): above it the region's walls are
 /// not standing, so a ramp that crosses the wall line in the air on its
 /// way down into the pocket is not a gouge. A move entirely above
 /// `wall_top` keeps the law points.
+///
+/// Arcs are read at [`ARC_READ_SHARE`] of `chord_tol`. The law points
+/// are the UNION of the joints at both tolerances (#689 review B1): the
+/// two joint sets are not nested (3 chords at `tol` become 5 at
+/// `tol / 4`), so the fine set alone can step over a sharp wall vertex
+/// an old joint stood on. Points on the arc never read closer than the
+/// truth, so the union adds no false gouge and keeps every old one. A
+/// joint reading is still a sampling: in Boundary mode an XY arc also
+/// answers on its true circle to the walls ([`wall_gouge`], #905).
 fn segments(m: &Move, mode: Mode, chord_tol: f64, wall_top: f64) -> Vec<(Point2, Point2)> {
-    let points = || law_points(m, chord_tol).into_iter().map(|p| (p, p)).collect();
+    let fine = chord_tol * ARC_READ_SHARE;
+    let points = || {
+        let mut v = law_points(m, fine);
+        if m.arc.is_some() {
+            v.extend(law_points(m, chord_tol));
+        }
+        v.into_iter().map(|p| (p, p)).collect()
+    };
+    let chord_tol = fine;
     if mode != Mode::Area {
         return points();
     }

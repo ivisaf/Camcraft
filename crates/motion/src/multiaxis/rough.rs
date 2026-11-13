@@ -26,7 +26,7 @@ use crate::geo2d::Region;
 use crate::geometry::Triangle;
 use crate::machining2d::GenError;
 use crate::machining3d::Pocket3DParams;
-use crate::stock_sim::Dexel;
+use crate::stock_sim::Columns;
 
 use super::avoid::Shank;
 use super::stamp::stamp_axes;
@@ -58,7 +58,7 @@ pub fn multiaxis_rough_prev(
     footprint: &Region,
     p: &Pocket3DParams,
     c: &AxisControl,
-    mask: Option<&Dexel>,
+    mask: Option<&Columns<'_>>,
     shank: Option<&Shank>,
 ) -> Result<Toolpath, GenError> {
     let base = crate::machining3d::pocket3d_prev(facets, footprint, p, mask)?;

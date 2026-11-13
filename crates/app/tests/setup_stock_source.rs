@@ -261,3 +261,35 @@ fn the_setup_sheet_states_the_stock_source() {
     assert!(text.contains("  source   What Setup1 leaves behind\n"), "{text}");
     assert!(text.contains("max (30.000, 30.000, 16.000)  volume 64800.000 mm3"), "{text}");
 }
+
+/// #866: a plate held the same way in both setups carries, even when
+/// both hold it turned side-on - the carry reads the turn BETWEEN the
+/// setups, never either setup's own turn from as modelled.
+#[test]
+fn both_setups_turned_alike_carry_through_the_identity() {
+    let world = new_world();
+    let mut h = History::default();
+    h.execute(&world, ImportModel::from_mesh("plate", cube(Point3::new(-40.0, -30.0, 0.0), Point3::new(40.0, 30.0, 8.0))));
+    h.execute(&world, CreateSetup::new(&world, None, None).expect("materialize Setup1"));
+    h.execute(&world, AlignPartToSetup::angles(&world, "Setup1", [-90.0, 0.0, 0.0]).expect("stand it on its edge"));
+    h.execute(&world, CreateSetup::new(&world, None, Some("Setup1")).expect("Setup2 from Setup1's datum"));
+    assert_eq!(setup_stock::carry_refusal(&world, "Setup2"), None, "the same hold carries");
+    h.execute(&world, SetSetupStockSource::new(&world, "Setup2", StockSource::FromPrevious).expect("pickable"));
+}
+
+/// #866: a genuinely side-on turn between the setups is refused, and the
+/// refusal says which turn, between which setups, in the row's words.
+#[test]
+fn a_side_on_turn_between_setups_is_refused_naming_the_turn() {
+    let world = new_world();
+    let mut h = History::default();
+    h.execute(&world, ImportModel::from_mesh("plate", cube(Point3::new(-40.0, -30.0, 0.0), Point3::new(40.0, 30.0, 8.0))));
+    h.execute(&world, CreateSetup::new(&world, None, None).expect("materialize Setup1"));
+    h.execute(&world, CreateSetup::new(&world, None, None).expect("Setup2"));
+    h.execute(&world, AlignPartToSetup::angles(&world, "Setup2", [-90.0, 0.0, 0.0]).expect("stand it on its edge"));
+    let why = setup_stock::carry_refusal(&world, "Setup2").expect("refused");
+    assert!(why.contains("from setup 'Setup1' into setup 'Setup2'"), "{why}");
+    assert!(why.contains("'Setup2' holds the part turned X -90°, Y 0°, Z 0° from how 'Setup1' holds it"), "{why}");
+    assert!(why.contains(CARRY_TURN_REFUSAL), "the named refusal stays: {why}");
+    assert!(SetSetupStockSource::new(&world, "Setup2", StockSource::FromPrevious).is_err());
+}

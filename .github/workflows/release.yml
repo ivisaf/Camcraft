@@ -2,7 +2,7 @@
 # and FreeBSD.
 # Linux packages TAR.GZ, DEB, RPM, AppImage, Snap, and Flatpak; macOS packages
 # a universal app as ZIP and DMG; FreeBSD an amd64 tarball; Windows assembles
-# its zip and installer.
+# its zip (cargo xtask package) and installer.
 # Signing is optional and secret-gated (scripts/sign.ps1): with no
 # CAMCRAFT_SIGN_* secret the binaries ship unsigned, as every release so
 # far has. The decision is logged in RECOMMENDED.md ("M13.3").
@@ -15,6 +15,10 @@
 # and flatpak follow Linux; publish waits for all seven with !cancelled(),
 # puts every asset that was built on the release page and names any
 # platform whose build failed, so one broken package never withholds the rest.
+# Docs site (#688): `site` builds the Zola site in site/ from the same tree
+# alongside the platform builds; `pages` deploys it to GitHub Pages only on
+# a tag run and only once `publish` has put the release page up, so the
+# site's download links never point at a release that is not there.
 name: Release
 on:
   push:
@@ -230,31 +234,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "sign.ps1 exited with $LASTEXITCODE" }
       - name: Assemble portable zip
         id: zip
-        shell: pwsh
+        shell: bash
+        # The layout lives once, in xtask (xtask/src/release_pack.rs, #752):
+        # the same staging `cargo xtask release` uses locally. The version's
+        # single truth is the binary we ship - xtask reads it from post.exe
+        # --version - and goes to $GITHUB_OUTPUT (version, stage, zip) and
+        # $GITHUB_ENV (CAMCRAFT_VERSION) for the steps below.
         run: |
-          $ErrorActionPreference = "Stop"
-          # The version's single truth is the binary we ship (it stamps
-          # CARGO_PKG_VERSION itself); parsing cargo metadata JSON proved
-          # host-dependent (empty workspace_version under PowerShell 5.1).
-          $ver = ((& ".\target\release\post.exe" --version) -split '\s+')[1]
-          if (-not $ver) { throw "cannot read the version from post.exe" }
-          "CAMCRAFT_VERSION=$ver" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "version=$ver" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
-          $stage = "dist/camcraft-$ver-win-x64"
-          New-Item -ItemType Directory -Force `
-              "$stage/assets/posts", "$stage/assets/machines", "$stage/assets/ui", `
-              "$stage/assets/scripts", "$stage/assets/themes" | Out-Null
-          Copy-Item target/release/camcraft-ui.exe $stage
-          Copy-Item target/release/camcraft-cli.exe $stage
-          Copy-Item target/release/post.exe $stage
-          Copy-Item assets/posts/* "$stage/assets/posts"
-          Copy-Item assets/machines/* "$stage/assets/machines"
-          Copy-Item assets/ui/* "$stage/assets/ui"
-          Copy-Item assets/scripts/* "$stage/assets/scripts"
-          Copy-Item assets/themes/* "$stage/assets/themes"
-          Copy-Item RELEASE_NOTES.md, TESTING.md, LICENSE, NOTICE $stage
-          Compress-Archive -Path $stage -DestinationPath "dist/camcraft-$ver-win-x64.zip" -Force
-          Get-ChildItem dist
+          cargo xtask package --bin-dir target/release --out dist
+          ls dist
       - name: Build installer (Inno Setup, same staged tree as the zip)
         shell: pwsh
         # windows-latest ships Inno Setup 6; -Required makes a missing ISCC
@@ -266,7 +254,7 @@ jobs:
           CAMCRAFT_SIGN_CERT_PASSWORD: ${{ secrets.CAMCRAFT_SIGN_CERT_PASSWORD }}
         run: |
           $ErrorActionPreference = "Stop"
-          & scripts/installer.ps1 -Version $env:CAMCRAFT_VERSION -Required
+          & scripts/installer.ps1 -Version $env:CAMCRAFT_VERSION -Stage "${{ steps.zip.outputs.stage }}" -Required
           if ($LASTEXITCODE -ne 0) { throw "installer.ps1 exited with $LASTEXITCODE" }
           Get-ChildItem dist
       - name: Remove the signing certificate from the runner
@@ -449,3 +437,66 @@ jobs:
           # A failed platform leaves its globs empty; the step above already
           # refused a release with no asset at all.
           fail_on_unmatched_files: false
+
+  site:
+    # #688: the documentation site, built with Zola from this run's tree
+    # (the tagged tree on a tag run). Read-only; a workflow_dispatch run
+    # builds it as a check and deploys nothing.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Zola
+        run: |
+          curl -LfsS -o /tmp/zola.tar.gz https://github.com/getzola/zola/releases/download/v0.23.6/zola-v0.23.6-x86_64-unknown-linux-musl.tar.gz
+          echo '7d77a4220a4f699cba2fc0e0c7859f780e887e269159ad4fab90e11ea16c906f  /tmp/zola.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/zola.tar.gz -C /tmp zola
+          /tmp/zola --version
+      - name: Version the site is built from
+        # The workspace version is the release's version (the publish job
+        # checks the tag names it too); the site's templates read it from
+        # site/version.toml, which only this step writes (gitignored).
+        shell: bash
+        run: |
+          ver=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          if [ -z "$ver" ]; then echo "::error::no [workspace.package] version in Cargo.toml"; exit 1; fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$ver" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not name version v$ver"; exit 1
+          fi
+          printf 'version = "%s"\n' "$ver" > site/version.toml
+          cat site/version.toml
+      - name: Build the site
+        # The project Pages URL of whichever repo runs this (a fork's own
+        # Pages included), so every link resolves where it is deployed.
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          cd site
+          /tmp/zola build --base-url "https://${owner}.github.io/${repo}"
+          test -s public/index.html
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/public
+
+  pages:
+    # #688: deploy the built site to GitHub Pages (repo setting: Pages
+    # source "GitHub Actions"). Only on a tag, only when the site built and
+    # the release page was published. The Pages write and OIDC token are
+    # scoped to this job alone.
+    needs: [site, publish]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') && needs.site.result == 'success' && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5

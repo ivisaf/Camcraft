@@ -80,6 +80,14 @@ pub enum ToolKind {
     /// radius by law (a probe tip is a sphere). It turns no spindle and
     /// removes no stock: only the Probe operation mounts it.
     Probe,
+    /// Plasma torch (#670): the arc cuts a kerf through the plate.
+    /// `diameter` IS the kerf width (≈ 1.5x the nozzle orifice, set by
+    /// the consumables, amperage and material - confirm by a test cut;
+    /// Tormach's 1300PL guidance), so every offset reads radius =
+    /// kerf / 2. It turns no spindle: `rpm` must be 0 (a stated rpm is
+    /// refused by name, [`Tool::torch_refusal`]). Only the plasma
+    /// operations mount it.
+    Torch,
 }
 
 impl core::fmt::Display for ToolKind {
@@ -97,6 +105,7 @@ impl core::fmt::Display for ToolKind {
             ToolKind::Form => "form gauge",
             ToolKind::Taper => "chamfer mill",
             ToolKind::Probe => "touch probe",
+            ToolKind::Torch => "plasma torch",
         };
         f.write_str(s)
     }
@@ -236,7 +245,9 @@ impl Tool {
             && self.shank_len >= 0.0
             && self.holder_d >= 0.0
             && self.holder_len >= 0.0
-            && self.rpm > 0.0
+            // A torch turns no spindle (#670): its rpm is 0 by law, and
+            // every spinning kind states a positive one.
+            && (if self.kind == ToolKind::Torch { self.rpm == 0.0 } else { self.rpm > 0.0 })
             && self.feed > 0.0
             && self.flutes.is_none_or(|z| (1..=32).contains(&z))
             && self.orientation.is_none_or(crate::orientation::is_valid)
@@ -299,8 +310,24 @@ impl Tool {
                     (self.corner_r - self.diameter * 0.5).abs() < 1e-9
                         && self.flute_len >= self.diameter
                 }
+                // A torch's kerf is a cut width, never a corner: no
+                // corner radius rides it (#670).
+                ToolKind::Torch => self.corner_r == 0.0,
                 _ => true,
             }
+    }
+
+    /// The torch's own refusal, by name (#670): a plasma torch stating a
+    /// spindle speed asks the program for an S word a torch has not.
+    /// `None` for every other kind and for a torch at rpm 0.
+    #[must_use]
+    pub fn torch_refusal(&self) -> Option<String> {
+        (self.kind == ToolKind::Torch && self.rpm != 0.0).then(|| {
+            format!(
+                "a plasma torch turns no spindle - its rpm must be 0 (it states {}); the kerf width is the torch's diameter",
+                self.rpm
+            )
+        })
     }
 
     /// The corner radius the tip really has (#263). A ball nose's or a
@@ -398,7 +425,7 @@ impl Tool {
             // meridian, which the turning verdicts read off `Tool`,
             // not off this cylinder.
             ToolKind::EndMill | ToolKind::Tap | ToolKind::Bore | ToolKind::Turning
-            | ToolKind::Groove | ToolKind::Thread | ToolKind::Form => add_pt(&mut p, 0.0, r),
+            | ToolKind::Groove | ToolKind::Thread | ToolKind::Form | ToolKind::Torch => add_pt(&mut p, 0.0, r),
             // The chamfer mill's cone is the same picture read the
             // other way in purpose - apex at the tip center opening
             // upward to the full radius - so it shares the drill's
@@ -448,146 +475,15 @@ fn dome_radius(rad: f64, z: f64) -> f64 {
     (2.0 * rad * z - z * z).max(0.0).sqrt()
 }
 
-/// The starter catalog: name, then tool. Ordinary metric sizes in a
+/// The starter catalog: name, then tool, in display order - the tool
+/// library pane lists these top to bottom. Ordinary metric sizes in a
 /// 2-flute/4-flute ladder; shanks step up to the next common gauge so
 /// the shank-reach law has something wider than the flute to collide
-/// with. Display order - the tool library pane lists these top to bottom.
+/// with. The values are data (#741): `assets/tools/catalog.json`,
+/// embedded and read by [`crate::catalog_asset`].
 #[must_use]
 pub fn catalog() -> Vec<(&'static str, Tool)> {
-    let em = |diameter: f64, corner_r: f64, kind: ToolKind, flute_len: f64, shank_d: f64, rpm: f64, feed: f64| Tool {
-        kind,
-        diameter,
-        corner_r,
-        tip_angle: 0.0,
-        pitch: 0.0,
-        nose_radius: 0.0,
-        width: 0.0,
-        flute_len,
-        shank_d,
-        shank_len: 40.0,
-        holder_d: 44.0,
-        holder_len: 35.0,
-        material_group: "aluminum".into(),
-        rpm,
-        feed,
-        tool_material: None,
-        flutes: None, center_cutting: true, orientation: None,
-    };
-    // Cycle tools: straight-shank bodies (a jobber drill's shank is its
-    // own diameter), no corner radius, 118-degree points, ISO coarse
-    // pitches; a tap's feed number is the rpm x pitch starting value.
-    let cy = |kind: ToolKind, diameter: f64, tip_angle: f64, pitch: f64, flute_len: f64, shank_d: f64, rpm: f64, feed: f64| {
-        Tool { kind, diameter, corner_r: 0.0, tip_angle, pitch, nose_radius: 0.0, width: 0.0, flute_len, shank_d, shank_len: 40.0, holder_d: 44.0, holder_len: 35.0, material_group: "aluminum".into(), rpm, feed, tool_material: None, flutes: None, center_cutting: true, orientation: None }
-    };
-    // Turning (M5.2 A): the facing insert - a plain toolholder shank,
-    // no holder stack (the turret IS the holder), an 0.8 nose like the
-    // ISO roughing inserts. Feeds are the handbook's starting values
-    // for aluminum facing with carbide.
-    let tn = |diameter: f64, nose_radius: f64, flute_len: f64, shank_d: f64, rpm: f64, feed: f64| Tool {
-        kind: ToolKind::Turning, diameter, corner_r: 0.0, tip_angle: 0.0, pitch: 0.0,
-        nose_radius, width: 0.0, flute_len, shank_d, shank_len: 60.0, holder_d: 0.0, holder_len: 0.0,
-        material_group: "aluminum".into(), rpm, feed, tool_material: None, flutes: None, center_cutting: true, orientation: None,
-    };
-    // Grooving (M5.2 C): the blade insert on the same toolholder body -
-    // the ground WIDTH is the tool, the nose and the taper are not
-    // modeled (the blade cuts a kerf, not a rolled circle). Feeds are
-    // the handbook's starting values for aluminum: grooving rides a
-    // facing-like feed, cutoff plunges slow.
-    let gt = |diameter: f64, width: f64, flute_len: f64, shank_d: f64, rpm: f64, feed: f64| Tool {
-        kind: ToolKind::Groove, diameter, corner_r: 0.0, tip_angle: 0.0, pitch: 0.0,
-        nose_radius: 0.0, width, flute_len, shank_d, shank_len: 60.0, holder_d: 0.0, holder_len: 0.0,
-        material_group: "aluminum".into(), rpm, feed, tool_material: None, flutes: None, center_cutting: true, orientation: None,
-    };
-    // Threading (M5.2 D): the V-form insert on the same toolholder
-    // body - the GROUND PROFILE (width across the crest, the flanks'
-    // included angle) is the tool, the pitch is the THREAD's and lives
-    // in the operation. Crest widths are the handbook's 0.866 x P for
-    // the two ordinary metric coarse ladders; feeds are the starting
-    // values for single-point thread whirling in aluminum.
-    let td = |diameter: f64, width: f64, form_angle: f64, flute_len: f64, shank_d: f64, rpm: f64, feed: f64| Tool {
-        kind: ToolKind::Thread, diameter, corner_r: 0.0, tip_angle: form_angle, pitch: 0.0,
-        nose_radius: 0.0, width, flute_len, shank_d, shank_len: 60.0, holder_d: 0.0, holder_len: 0.0,
-        material_group: "aluminum".into(), rpm, feed, tool_material: None, flutes: None, center_cutting: true, orientation: None,
-    };
-    // Form gauges (M5.2 E2): the crown radius lives in `nose_radius`
-    // (the arc of the ground edge in the work's meridian - the
-    // field the Turning insert uses for its nose circle, read here
-    // as the other ground radius a turning steel carries) and the
-    // band width in `width`. A slow feed: forming is a sink, and
-    // the crown's corners carry the whole width at once.
-    let fg = |diameter: f64, crown_r: f64, width: f64, flute_len: f64, shank_d: f64, rpm: f64, feed: f64| Tool {
-        kind: ToolKind::Form, diameter, corner_r: 0.0, tip_angle: 0.0, pitch: 0.0,
-        nose_radius: crown_r, width, flute_len, shank_d, shank_len: 60.0, holder_d: 0.0, holder_len: 0.0,
-        material_group: "aluminum".into(), rpm, feed, tool_material: None, flutes: None, center_cutting: true, orientation: None,
-    };
-    let mut v = vec![
-        ("EM-0200-2FL", em(2.0, 0.0, ToolKind::EndMill, 6.0, 4.0, 18000.0, 600.0)),
-        ("EM-0300-2FL", em(3.0, 0.0, ToolKind::EndMill, 9.0, 4.0, 15000.0, 900.0)),
-        ("EM-0400-2FL", em(4.0, 0.0, ToolKind::EndMill, 12.0, 6.0, 12000.0, 1200.0)),
-        ("EM-0600-4FL", em(6.0, 0.0, ToolKind::EndMill, 15.0, 8.0, 9500.0, 1800.0)),
-        ("EM-0800-4FL", em(8.0, 0.0, ToolKind::EndMill, 20.0, 10.0, 7200.0, 2400.0)),
-        ("EM-1000-4FL", em(10.0, 0.0, ToolKind::EndMill, 22.0, 10.0, 5800.0, 3000.0)),
-        ("EM-1200-2FL", em(12.0, 0.0, ToolKind::EndMill, 25.0, 12.0, 4800.0, 3600.0)),
-        ("BN-0600", em(6.0, 3.0, ToolKind::BallNose, 15.0, 8.0, 9000.0, 1500.0)),
-        ("BN-1000", em(10.0, 5.0, ToolKind::BallNose, 22.0, 10.0, 6000.0, 2000.0)),
-        ("BB-1000-R1", em(10.0, 1.0, ToolKind::BullNose, 20.0, 10.0, 6500.0, 2200.0)),
-        ("DR-0200", cy(ToolKind::Drill, 2.0, 118.0, 0.0, 6.0, 2.0, 15000.0, 150.0)),
-        ("DR-0300", cy(ToolKind::Drill, 3.0, 118.0, 0.0, 9.0, 3.0, 12000.0, 120.0)),
-        ("DR-0400", cy(ToolKind::Drill, 4.0, 118.0, 0.0, 12.0, 4.0, 10000.0, 130.0)),
-        ("DR-0600", cy(ToolKind::Drill, 6.0, 118.0, 0.0, 18.0, 6.0, 7500.0, 115.0)),
-        // Chamfer mills (M2.4 B): the 90-degree cone is the everyday
-        // 45-degree chamfer tool; single-flute carbide, the handbook's
-        // stock sizes. Speeds track the end-mill ladder at the same
-        // diameter - a chamfer ride is light, and light wants rpm.
-        ("CM-0400-90", cy(ToolKind::Taper, 4.0, 90.0, 0.0, 6.0, 6.0, 12000.0, 1500.0)),
-        ("CM-0600-90", cy(ToolKind::Taper, 6.0, 90.0, 0.0, 10.0, 8.0, 10000.0, 2000.0)),
-        ("CM-1000-90", cy(ToolKind::Taper, 10.0, 90.0, 0.0, 16.0, 10.0, 6000.0, 3000.0)),
-        ("TAP-M4", cy(ToolKind::Tap, 4.0, 0.0, 0.7, 18.0, 4.5, 800.0, 560.0)),
-        ("TAP-M6", cy(ToolKind::Tap, 6.0, 0.0, 1.0, 20.0, 6.0, 600.0, 600.0)),
-        // The catalog boring bar, with the ground nose a boring tip
-        // is bought with (0.4 is the handbook's usual for a Ø10 bar)
-        // - inert for the drilling cycles, the ride radius for the
-        // boring kernel (M5.2 F). The mill holder stack cy gives is
-        // stripped, the tn family's rule: the turret IS the holder.
-        // Law (c) reads a band's column along Z about the move's XY,
-        // and a bar's steel lies RADIAL on a lathe - an OD column 22
-        // over the tip convicts every bore ride for a collision no
-        // boring bar has. Its kerf excuses the rest: Ø10 body on a
-        // Ø10 shank, the shank band skipped as the inserts' is.
-        ("BR-1000", Tool { nose_radius: 0.4, holder_d: 0.0, holder_len: 0.0, ..cy(ToolKind::Bore, 10.0, 0.0, 0.0, 20.0, 10.0, 4000.0, 400.0) }),
-        ("TN-1600-0R8", tn(16.0, 0.8, 8.0, 16.0, 3000.0, 150.0)),
-        ("GT-0200", gt(16.0, 2.0, 8.0, 16.0, 2500.0, 90.0)),
-        ("GT-0300", gt(16.0, 3.0, 8.0, 16.0, 2000.0, 60.0)),
-        ("TD-0866-60", td(16.0, 0.866, 60.0, 8.0, 16.0, 1200.0, 90.0)),
-        ("TD-1732-60", td(16.0, 1.732, 60.0, 8.0, 16.0, 800.0, 120.0)),
-        ("FG-0600-04", fg(16.0, 6.0, 4.0, 8.0, 16.0, 1500.0, 40.0)),
-        ("FG-1200-08", fg(16.0, 12.0, 8.0, 8.0, 16.0, 1200.0, 50.0)),
-        // The touch probe (#108): a 4 mm ruby ball on a 30 mm stylus, the
-        // everyday starter size - the Probe kind's catalog hint.
-        ("PRB-0400", probe_tool(4.0, 30.0)),
-    ];
-    // Cutting data (M13.2): the rotating mills state their edge
-    // material and flute count - carbide, as the speeds above were
-    // set for; the count the name carries (2FL/4FL), two on the ball
-    // and bull noses, one on the single-flute chamfer mills. Drills,
-    // taps and the turning steels state nothing: the table does not
-    // speak for them.
-    for (name, t) in &mut v {
-        let z = if name.ends_with("-4FL") {
-            Some(4)
-        } else if name.starts_with("CM-") {
-            Some(1)
-        } else if name.starts_with("EM-") || name.starts_with("BN-") || name.starts_with("BB-") {
-            Some(2)
-        } else {
-            None
-        };
-        if z.is_some() {
-            t.flutes = z;
-            t.tool_material = Some(ToolMaterial::Carbide);
-        }
-    }
-    v
+    crate::catalog_asset::shipped().iter().map(|(n, t)| (n.as_str(), t.clone())).collect()
 }
 
 /// A touch probe of stylus ball `ball_d` mm over a stylus `stylus_len` mm
@@ -613,6 +509,35 @@ pub fn probe_tool(ball_d: f64, stylus_len: f64) -> Tool {
         material_group: String::new(),
         rpm: 1.0,
         feed: 300.0,
+        tool_material: None,
+        flutes: None,
+        center_cutting: false,
+        orientation: None,
+    }
+}
+
+/// A plasma torch of kerf width `kerf` mm (#670): the kerf rides as the
+/// diameter, no corner, no spindle (rpm 0), the torch body as a plain
+/// shank. `feed` is a nominal starting value - the plasma op states its
+/// own (or leaves it to the controller's material table).
+#[must_use]
+pub fn torch_tool(kerf: f64) -> Tool {
+    Tool {
+        kind: ToolKind::Torch,
+        diameter: kerf,
+        corner_r: 0.0,
+        tip_angle: 0.0,
+        pitch: 0.0,
+        nose_radius: 0.0,
+        width: 0.0,
+        flute_len: 10.0,
+        shank_d: 30.0,
+        shank_len: 100.0,
+        holder_d: 0.0,
+        holder_len: 0.0,
+        material_group: "mild steel".into(),
+        rpm: 0.0,
+        feed: 2500.0,
         tool_material: None,
         flutes: None,
         center_cutting: false,

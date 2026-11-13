@@ -41,6 +41,8 @@ use crate::model;
 use crate::schema::{FixtureDef, Location};
 use crate::setup;
 
+pub use super::fixture_move::MoveFixture;
+
 /// The placement validation every pose write shares, in the
 /// `SetStock` voice: a unit quaternion (normalized at the chokepoint)
 /// and a finite position, or the command never exists. Shared by every
@@ -61,7 +63,7 @@ pub(crate) fn check_location(location: Location, what: &str) -> Result<Location,
 
 /// The gate every fixture-named command runs first: the table row is
 /// virtual, everything else must name a live entity.
-fn require_writable(world: &World, name: &str) -> Result<Entity, CommandError> {
+pub(super) fn require_writable(world: &World, name: &str) -> Result<Entity, CommandError> {
     if name == MACHINE_TABLE {
         return Err(CommandError::Invalid(
             "the machine table is derived from the machine file - it is not a fixture you can change".into(),
@@ -86,7 +88,7 @@ impl TagFixture {
         let entity = require_writable(world, name)?;
         if !model::is_model(world, &entity) {
             return Err(CommandError::Invalid(format!(
-                "'{name}' is setup furniture or CAM data, not a model to mark"
+                "'{name}' is not a model, so it cannot be marked as a fixture - it is a setup's stock or work offset, a setup, a tool, an operation or other CAM data"
             )));
         }
         if let Some(s) = setup_name
@@ -102,6 +104,14 @@ impl TagFixture {
             next: FixtureDef {
                 setup: setup_name.map(str::to_string),
                 fixed: prev.as_ref().is_some_and(|d| d.fixed),
+                // A re-bind keeps a built-in vise's parameters too: its
+                // geometry is unchanged.
+                vise: prev.as_ref().and_then(|d| d.vise.clone()),
+                // ...and a plate's grid and place (#819).
+                plate: prev.as_ref().map(|d| d.plate.clone()).unwrap_or_default(),
+                // ...and a mod-vise jaw block's (#820).
+                mod_jaw: prev.as_ref().and_then(|d| d.mod_jaw.clone()),
+                accessory: prev.as_ref().and_then(|d| d.accessory.clone()),
             },
             prev,
         })
@@ -170,6 +180,8 @@ impl Command for TagFixture {
 pub struct UntagFixture {
     name: String,
     prev: FixtureDef,
+    /// #819: an untagged plate stops being one - its riders leave it.
+    riders: crate::plate::mount::Unmounts,
 }
 
 impl UntagFixture {
@@ -180,6 +192,7 @@ impl UntagFixture {
         Ok(UntagFixture {
             name: name.to_string(),
             prev,
+            riders: crate::plate::mount::Unmounts::of(world, name),
         })
     }
 }
@@ -191,52 +204,14 @@ impl Command for UntagFixture {
                 .entity_view(world)
                 .remove(world.component::<FixtureDef>());
         }
+        self.riders.write(world, true);
     }
 
     fn invert(&self, world: &World) {
         if let Some(entity) = model::find_by_name(world, &self.name) {
             entity.entity_view(world).set(self.prev.clone());
         }
-    }
-}
-
-/// Move a fixture: the same rigid placement any model receives, named
-/// for the page that offers it. A fixture that is not a tagged model is
-/// refused - the alternative is silently moving a part someone else
-/// calls workholding.
-pub struct MoveFixture {
-    name: String,
-    prev: Location,
-    next: Location,
-}
-
-impl MoveFixture {
-    pub fn new(world: &World, name: &str, location: Location) -> Result<Self, CommandError> {
-        let entity = require_writable(world, name)?;
-        if !model::is_fixture(world, &entity) {
-            return Err(CommandError::Invalid(format!("'{name}' is not a fixture")));
-        }
-        let next = check_location(location, &format!("'{name}'"))?;
-        let prev = model::transform_of(world, &entity).unwrap_or_default();
-        Ok(MoveFixture {
-            name: name.to_string(),
-            prev,
-            next,
-        })
-    }
-}
-
-impl Command for MoveFixture {
-    fn apply(&self, world: &World) {
-        if let Some(entity) = model::find_by_name(world, &self.name) {
-            model::set_transform(world, &entity, self.next);
-        }
-    }
-
-    fn invert(&self, world: &World) {
-        if let Some(entity) = model::find_by_name(world, &self.name) {
-            model::set_transform(world, &entity, self.prev);
-        }
+        self.riders.write(world, false);
     }
 }
 
@@ -248,6 +223,9 @@ pub struct DeleteFixture {
     def: FixtureDef,
     location: Location,
     facets: std::sync::Arc<[Triangle]>,
+    /// #819: a deleted plate's riders leave it (they stay where they
+    /// stand), so a later plate given the same name never carries them.
+    riders: crate::plate::mount::Unmounts,
 }
 
 impl DeleteFixture {
@@ -260,6 +238,7 @@ impl DeleteFixture {
             def,
             location: model::transform_of(world, &entity).unwrap_or_default(),
             facets: model::facets_of(world, &entity).unwrap_or_default(),
+            riders: crate::plate::mount::Unmounts::of(world, name),
         })
     }
 }
@@ -269,9 +248,11 @@ impl Command for DeleteFixture {
         if let Some(e) = model::find_by_name(world, &self.name) {
             model::remove(world, &e);
         }
+        self.riders.write(world, true);
     }
 
     fn invert(&self, world: &World) {
+        self.riders.write(world, false);
         if model::find_by_name(world, &self.name).is_some() {
             return; // already restored (idempotent redo path)
         }

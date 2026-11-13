@@ -12,7 +12,7 @@ use crate::geometry::Triangle;
 use crate::machining2d::{
     cut_levels, GenError,
 };
-use crate::stock_sim::{self, Dexel, StockReport};
+use crate::stock_sim::{Columns, StockReport};
 /// The per-level cutter plan and its walk, level after level - the 3-D
 /// sibling of `machining2d::pocket`'s run, with the passes recomputed
 /// from the model at every z (that is the whole difference: 2-D knows
@@ -34,7 +34,7 @@ pub fn pocket3d_prev(
     facets: &[Triangle],
     footprint: &Region,
     p: &Pocket3DParams,
-    mask: Option<&Dexel>,
+    mask: Option<&Columns<'_>>,
 ) -> Result<Toolpath, GenError> {
     run_plain(facets, footprint, p, false, mask)
 }
@@ -73,7 +73,7 @@ pub fn pocket3d_offset_prev(
     facets: &[Triangle],
     footprint: &Region,
     p: &Pocket3DParams,
-    mask: Option<&Dexel>,
+    mask: Option<&Columns<'_>>,
 ) -> Result<Toolpath, GenError> {
     run_plain(facets, footprint, p, true, mask)
 }
@@ -83,7 +83,7 @@ fn run_plain(
     footprint: &Region,
     p: &Pocket3DParams,
     shell: bool,
-    mask: Option<&Dexel>,
+    mask: Option<&Columns<'_>>,
 ) -> Result<Toolpath, GenError> {
     guard_input(facets, footprint, p)?;
     let zs = cut_levels(p.top_z, p.bottom_z, p.stepdown)?;
@@ -150,6 +150,7 @@ pub fn pocket3d_air_split(
         threads: Vec::new(),
         probes: Vec::new(),
         breaks: Vec::new(),
+        plasma: None,
     };
     if !path.all_finite() {
         return Err(GenError::Invalid("path left the finite horizon".into()));
@@ -203,7 +204,7 @@ pub fn pocket3d_offset_with_rest_prev(
     facets: &[Triangle],
     footprint: &Region,
     p: &Pocket3DParams,
-    mask: Option<&Dexel>,
+    mask: Option<&Columns<'_>>,
 ) -> Result<(Toolpath, StockReport), GenError> {
     run_rest(facets, footprint, p, true, mask)
 }
@@ -217,7 +218,7 @@ pub fn pocket3d_with_rest_prev(
     facets: &[Triangle],
     footprint: &Region,
     p: &Pocket3DParams,
-    mask: Option<&Dexel>,
+    mask: Option<&Columns<'_>>,
 ) -> Result<(Toolpath, StockReport), GenError> {
     run_rest(facets, footprint, p, false, mask)
 }
@@ -227,7 +228,7 @@ fn run_rest(
     footprint: &Region,
     p: &Pocket3DParams,
     shell: bool,
-    mask: Option<&Dexel>,
+    mask: Option<&Columns<'_>>,
 ) -> Result<(Toolpath, StockReport), GenError> {
     guard_input(facets, footprint, p)?;
     let r = p.tool_diameter * 0.5;
@@ -240,7 +241,7 @@ fn run_rest(
     // history (one grid, one story; M3.1 D).
     let dex = match mask {
         Some(prev) => {
-            let mut d = prev.clone();
+            let mut d = prev.to_stock();
             subtract_upright(&mut d, &coarse.moves, r)?;
             d
         }
@@ -250,6 +251,7 @@ fn run_rest(
             d
         }
     };
+    let rest = dex.columns()?;
 
     // The rest ladder: same laws, half the step, rest-shaped targets.
     let zs_r = cut_levels(p.top_z, p.bottom_z, p.stepdown * 0.5)?;
@@ -259,7 +261,7 @@ fn run_rest(
     // order (M8.1): the status line reads the substitutions as the
     // machine lived them.
     let mut notes = coarse.notes;
-    match ladder(facets, footprint, p, &zs_r, Some(&dex), None, start, shell, None) {
+    match ladder(facets, footprint, p, &zs_r, Some(&rest), None, start, shell, None) {
         Ok(rp) => {
             moves.extend(rp.moves);
             notes.extend(rp.notes);
@@ -277,6 +279,7 @@ fn run_rest(
         threads: Vec::new(),
         probes: Vec::new(),
         breaks: Vec::new(),
+        plasma: None,
     };
     if !path.all_finite() {
         return Err(GenError::Invalid("path left the finite horizon".into()));
@@ -287,10 +290,11 @@ fn run_rest(
     // - over the combined path, so the report describes the machining,
     // not one of its legs.
     let mut dex = match mask {
-        Some(prev) => prev.clone(),
+        Some(prev) => prev.to_stock(),
         None => sim_of(facets, footprint, p)?.0,
     };
-    let part = stock_sim::part_surface(facets, dex.x0, dex.y0, dex.cell, dex.nx, dex.ny);
     subtract_upright(&mut dex, &path.moves, r)?;
-    Ok((path, stock_sim::measure(&dex, &part, footprint, EPS)))
+    // `Stock::measure` samples the model on the stock's own lattice -
+    // the part surface this verdict always measured against.
+    Ok((path, dex.measure(facets, footprint, EPS)))
 }

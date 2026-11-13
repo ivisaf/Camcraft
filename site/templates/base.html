@@ -1,0 +1,40 @@
+{#- CamCraft docs site base layout (#688). Provenance: our own template, no third-party theme. -#}
+{%- set build = load_data(path="version.toml", required=false) -%}
+{%- if build and build.version -%}{%- set version = build.version -%}{%- else -%}{%- set version = "" -%}{%- endif -%}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ config.title }}{% endblock title %}</title>
+  <meta name="description" content="{% block description %}{{ config.description }}{% endblock description %}">
+  <link rel="stylesheet" href="{{ get_url(path='style.css') }}">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="{{ get_url(path='@/_index.md') }}">CamCraft</a>
+      <nav>
+        <a href="{{ get_url(path='@/guide/_index.md') }}">User guide</a>
+        <a href="{{ get_url(path='@/developers/_index.md') }}">Developers</a>
+        <a href="{{ config.extra.repo }}/releases">Downloads</a>
+        <a href="{{ config.extra.repo }}">Source</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    {% block content %}{% endblock content %}
+  </main>
+  <footer class="wrap foot">
+    <p>
+      {% if version %}Built from CamCraft {{ version }}.{% else %}Development build of the site (not from a release tag).{% endif %}
+      CamCraft is open source under the Apache License 2.0.
+      Report problems on the <a href="{{ config.extra.repo }}/issues">issue tracker</a>.
+    </p>
+    <p class="small">
+      CamCraft is a clean-room implementation of HSMWorks' user-visible behaviour.
+      "HSMWorks" is a trademark of Autodesk; this project is independent and unaffiliated.
+    </p>
+  </footer>
+</body>
+</html>

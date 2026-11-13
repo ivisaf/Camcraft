@@ -1,9 +1,9 @@
 # CI: the batch gate tier, run BY HAND only (Actions tab -> CI -> Run
 # workflow). The repo has a 3000-minute monthly Actions budget (Windows bills
 # 2x, macOS 10x), so nothing runs on push or PR: gates run locally
-# (scripts/gate.ps1), and GitHub runs only the tag-driven release build.
-# The Windows job runs scripts/gate.ps1 -Tier batch - every debug suite
-# minus the script's SLOW_BINARIES (golden_cl and the regression suites
+# (cargo xtask gate), and GitHub runs only the tag-driven release build.
+# The Windows job runs cargo xtask gate batch - every debug suite
+# minus xtask's SLOW_BINARIES (golden_cl and the regression suites
 # included), the ui suites from crates/ui, clippy with warnings denied -
 # then the headless app run. The release tier (slow binaries and the
 # --ignored heavy lanes in release) is nightly.yml's.
@@ -30,8 +30,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - name: Batch gate tier (debug suites minus slow, ui, clippy)
-        shell: pwsh
-        run: ./scripts/gate.ps1 -Tier batch
+        shell: bash
+        run: cargo xtask gate batch
       - name: Gate logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -91,7 +91,10 @@ jobs:
         run: cargo check -p camcraft-post -p camcraft-cl -p camcraft-geometry --target wasm32-unknown-unknown
       # #31 (M13.3) rung 1: the domain layer, flecs' C included, builds and
       # links for wasm32 through the pinned wasi-sysroot (web/build-app-wasm.sh
-      # says why each workaround is there). The UI is not on this rung yet.
+      # says why each workaround is there). Rungs 2-3: the same script then
+      # links the UI (camcraft_ui.wasm, a cdylib), runs the wasm-bindgen CLI
+      # pinned by Cargo.lock over it and lays out the page in target/web.
+      # Running that page in a browser here is still owed.
       - name: App (flecs + domain) for wasm32-unknown-unknown
         shell: bash
         run: web/build-app-wasm.sh

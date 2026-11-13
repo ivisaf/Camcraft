@@ -402,17 +402,19 @@ fn a_swinging_head_sweeps_the_island_wall_mid_turn() {
     // The island wall stands at x=10, the tool column at x=4: the
     // shank (r 7 over an 8 mm flute) reaches 11 - a hair from the
     // wall's sampled column (10.05) when vertical, clear of it when
-    // leaning away, excused by the flute-kerf fiction when leaning
-    // into it. Both commanded poses pass law (c). The turns between
-    // them are the problem:
+    // leaning away. The turns between the poses are the problem:
     //  - the plunge runs home to B-30 while descending to z=-20: mid
     //    path at turn fraction 0.0 the head is still vertical and the
     //    shank grazes the wall (law (c) only ever sees the -30 pose,
     //    and only at the to-points, where it misses);
     //  - the lateral creeps toward the wall while swinging B-30 to
     //    B+18: through fractions 0.25-0.75 the leaning column walks
-    //    across the wall's annulus, while the stated pose at the
-    //    to-point stands inside the kerf's reach.
+    //    across the wall's annulus. Its stated pose at the to-point
+    //    (tip x 6, leaning 18 degrees into the wall) puts the shank
+    //    itself in the island: law (c) used to excuse that as the
+    //    flutes' kerf, a disc it had moved under the leaning shank;
+    //    since #903 the kerf stays at the tip and (c) convicts the
+    //    move - (c)'s part verdict stands, so (c3) is not asked twice.
     let r = {
         let mut loops = vec![rect(0.0, 0.0, 30.0, 30.0).loops()[0].clone()];
         loops.push(
@@ -442,8 +444,8 @@ fn a_swinging_head_sweeps_the_island_wall_mid_turn() {
     assert_eq!(
         warns,
         vec![
+            Warning::ShankHit { at: 2, part: true },
             Warning::SweepHit { at: 1, part: true },
-            Warning::SweepHit { at: 2, part: true },
         ],
         "{warns:?}"
     );

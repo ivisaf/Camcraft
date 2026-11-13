@@ -121,6 +121,10 @@ pub struct PathDto {
     /// same additive law - absent is none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub breaks: Vec<super::break_dto::EdgeBreakDto>,
+    /// The plasma record (#670, `crate::cl::PlasmaCut`): the same
+    /// additive law - absent is none, every path but a plasma cut's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plasma: Option<super::plasma_dto::PlasmaCutDto>,
 }
 
 /// One cached control-compensated span: the engage / cancel move
@@ -203,8 +207,10 @@ pub enum CycleKindDto {
     Peck,
     Deep,
     Tap,
+
     Bore,
     BackBore,
+    FloatingTap,
 }
 
 impl CycleDto {
@@ -216,6 +222,7 @@ impl CycleDto {
                 CycleKind::Peck => CycleKindDto::Peck,
                 CycleKind::Deep => CycleKindDto::Deep,
                 CycleKind::Tap => CycleKindDto::Tap,
+                CycleKind::FloatingTap => CycleKindDto::FloatingTap,
                 CycleKind::Bore => CycleKindDto::Bore,
                 CycleKind::BackBore => CycleKindDto::BackBore,
             },
@@ -237,6 +244,7 @@ impl CycleDto {
                 CycleKindDto::Peck => CycleKind::Peck,
                 CycleKindDto::Deep => CycleKind::Deep,
                 CycleKindDto::Tap => CycleKind::Tap,
+                CycleKindDto::FloatingTap => CycleKind::FloatingTap,
                 CycleKindDto::Bore => CycleKind::Bore,
                 CycleKindDto::BackBore => CycleKind::BackBore,
             },
@@ -290,6 +298,10 @@ pub struct SetupDto {
     /// picked - is #317's implicit rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stock_source: Option<String>,
+    /// #389: the setup's own post options, additive (no version step).
+    /// Absent follows the document's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_options: Option<SetupPostOptionsDto>,
 }
 
 /// A setup's WCS as files hold it. v54 (#342) writes one entity name
@@ -344,7 +356,7 @@ impl AlignmentDto {
 /// DECLARED binding, same grammar as `OperationDto::setup`: absent
 /// means the first setup by name (the implicit-setup law), so a tagged
 /// model in a setup-free document saves as one key and nothing more.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct FixtureDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<String>,
@@ -353,6 +365,26 @@ pub struct FixtureDto {
     /// and false saves as no key, so such files round-trip unchanged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fixed: bool,
+    /// A built-in vise's parameters (#788); absent - plain steel. Kept
+    /// as raw JSON so a key this build can't read is dropped with a load
+    /// note, never a failed load (#812, `fixture_keys`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vise: Option<serde_json::Value>,
+    /// A fixture plate's grid (#819); absent - not a plate. Kept as raw
+    /// JSON so a key this build can't read is dropped and logged on
+    /// load, never a failed load (#812).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plate: Option<serde_json::Value>,
+    /// Where this fixture stands on a plate (#819); same lenient read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_plate: Option<serde_json::Value>,
+    /// A mod-vise jaw block's parameters (#820); same lenient read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mod_jaw: Option<serde_json::Value>,
+    /// A built-in accessory's kind and dimensions (#789); absent - not
+    /// one. Same lenient read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessory: Option<serde_json::Value>,
 }
 
 /// An operation as files hold it: definition, the stamp the last generate
@@ -479,6 +511,7 @@ impl PathDto {
             threads: t.path.threads.iter().map(super::thread_dto::ThreadCycleDto::from_cycle).collect(),
             probes: t.path.probes.iter().map(super::touch_dto::ProbeTouchDto::from_touch).collect(),
             breaks: t.path.breaks.iter().map(super::break_dto::EdgeBreakDto::from_break).collect(),
+            plasma: t.path.plasma.as_ref().map(super::plasma_dto::PlasmaCutDto::from_cut),
         }
     }
 
@@ -503,6 +536,7 @@ impl PathDto {
         path.probes = super::touch_dto::load(&self.probes, &path.moves);
         path.threads = self.threads.iter().filter_map(|t| t.to_cycle(&path.moves)).collect();
         path.breaks = super::break_dto::load(&self.breaks);
+        path.plasma = self.plasma.as_ref().and_then(|p| p.load(&path.moves));
         ToolpathCache::new(path, self.warnings.clone())
     }
 }

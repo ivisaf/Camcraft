@@ -1,4 +1,4 @@
-//! GPU smoke tests for the viewport pipelines.
+//! GPU smoke tests for the viewport pipelines, plus the tutorial pictures.
 //!
 //! Provenance: our own test rig; nothing here runs in the app path.
 //!
@@ -9,14 +9,26 @@
 //! a machine with no adapter at all they print a loud SKIP (not a pass) -
 //! `CAMCRAFT_REQUIRE_GPU=1` makes that a failure.
 //!
+//! The docs test at the bottom lives here rather than in its own binary on
+//! purpose: every fallback device in this crate shares the one `GPU_TEST_LOCK`
+//! below, and a fifth GPU process racing device creation across process
+//! boundaries is what made full-suite runs flake.
+//!
 //! Gate map (M4.4): covers ui::state, ui::viewport, app::stock.
 
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::fs;
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use egui_wgpu::wgpu;
+use image::{ImageFormat, RgbaImage};
+use camcraft_app::geometry::transform_point;
 use camcraft_app::stock::{StockShape, stock_mesh};
-use camcraft_ui::state::DisplayMode;
+use camcraft_app::{model, setup, setup_align};
+use camcraft_ui::interact;
+use camcraft_ui::state::{CommandKind, DisplayMode, State};
 use camcraft_ui::viewport::{Camera, GpuPart, ProjectionMode, View3D};
 
 const SIDE: u32 = 256;
@@ -33,6 +45,20 @@ fn device_and_queue() -> Option<(wgpu::Device, wgpu::Queue)> {
         Ok(gpu) => gpu.map(|g| (g.device, g.queue)),
         Err(err) => panic!("{err}"),
     }
+}
+
+/// This binary renders every frame on one fallback device. Device
+/// creation and teardown are the cross-process crash point (sibling GPU
+/// test binaries and egui_kittest's harness devices build their own in
+/// parallel processes), so a per-frame device made this binary the
+/// suite's loudest racer. One `OnceLock` creation per run, held until
+/// process exit - the OS closes it, no in-process device drop races a
+/// sibling's creation. Callers hold `GPU_TEST_LOCK` across use.
+fn shared_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
+    static SHARED: OnceLock<Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)>> = OnceLock::new();
+    SHARED
+        .get_or_init(|| device_and_queue().map(|(d, q)| (Arc::new(d), Arc::new(q))))
+        .clone()
 }
 
 /// Triangle soup of a stock shape, world-identity placed.
@@ -111,17 +137,18 @@ fn render_mode(
     display: DisplayMode,
 ) -> Option<(Vec<u8>, u32, u32)> {
     let _gpu_guard = GPU_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (device, queue) = device_and_queue()?;
-    let mut view = View3D::new(&device, FORMAT, SIDE, SIDE);
-    view.set_document(&device, &queue, parts);
+    let (device, queue) = shared_device()?;
+    let (device, queue) = (device.as_ref(), queue.as_ref());
+    let mut view = View3D::new(device, FORMAT, SIDE, SIDE);
+    view.set_document(device, queue, parts);
     let mvp = cam.mvp(1.0);
     let eye = cam.eye_f32();
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("gpu-test-frame"),
     });
-    view.render(&queue, &mut enc, &mvp, eye, display);
+    view.render(queue, &mut enc, &mvp, eye, display);
     queue.submit([enc.finish()]);
-    view.snapshot_rgba(&device, &queue)
+    view.snapshot_rgba(device, queue)
 }
 
 /// True when the pixel differs from the frame's corner (background).
@@ -396,6 +423,296 @@ fn cut_region_fill_is_translucent() {
     assert!(
         see_through * 2 > moved,
         "fill must blend over what it covers, not replace it: {see_through}/{moved} gentle"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The tutorial pictures in `docs/images/`, kept honest by rendering them.
+//
+// The law (#291's docs lane): every screenshot a tutorial carries is a
+// rendered frame of a committed example project - `examples/first-part.
+// camproj` opened through the real open command, drawn by the real
+// viewport pipelines with the real toolpath display (`interact::
+// toolpath_lines`), never a hand-captured picture that rots in silence.
+// Each step along `setup::operation_order` reveals one more operation's
+// path, so the sequence reads exactly like the app's Show-all order.
+//
+// The pictures are golden files: a normal test run compares the rendered
+// frames against the committed PNGs and fails on any difference (same
+// per-channel epsilon the software-driver pixel checks above use);
+// `UPDATE_DOCS_IMAGES=1 cargo test -p camcraft-ui --test gpu_render`
+// re-renders and rewrites them, the same workflow as the kittest snapshot
+// gate. That is the whole refresh story: regenerate, eyeball the diff in
+// the PR, commit.
+
+const DOC_W: u32 = 800;
+const DOC_H: u32 = 600;
+
+/// Per-channel tolerance against the committed picture.
+const DOC_EPS: i32 = 6;
+
+/// The app's own f64→f32 guard (`interact::ftoz`, duplicated because it
+/// is crate-private; a bare cast would differ only on non-finite input).
+fn ftoz(v: f64) -> f32 {
+    if v.is_finite() { v as f32 } else { 0.0 }
+}
+
+/// World-space triangle soup for one entity - `egui_app::world.rs`'s
+/// `world_verts` law: facets, then the active setup's alignment, then
+/// the z-forward cast the viewport expects.
+fn soup(state: &State, entity: &flecs_ecs::prelude::Entity) -> Vec<[f32; 3]> {
+    let tris = model::facets_of(&state.world, entity).unwrap_or_default();
+    let loc = setup_align::view_pose(&state.world, entity).unwrap_or_default();
+    let mut verts = Vec::with_capacity(tris.len() * 3);
+    for t in tris.iter() {
+        for p in [t.a, t.b, t.c] {
+            let p = transform_point(p, loc.pos, loc.rot);
+            verts.push([ftoz(p.x), ftoz(p.y), ftoz(p.z)]);
+        }
+    }
+    verts
+}
+
+/// The frame's parts in draw order: the models, then the active setup's
+/// stock block (the no-sim, no-field-view arm of `collect_parts` - the
+/// docs steps have neither by construction). No fills: no region is
+/// picked on screen, so there is no fill to show.
+fn doc_parts(state: &State) -> Vec<GpuPart> {
+    let mut parts: Vec<GpuPart> = model::model_entities(&state.world)
+        .into_iter()
+        .filter(|(name, _)| !state.hidden_models.iter().any(|h| h == name))
+        .map(|(_, entity)| GpuPart {
+            verts: soup(state, &entity),
+            selected: false,
+            stock: false,
+            fill: false,
+            classes: Vec::new(),
+        })
+        .collect();
+    let stock_name = setup::stock_entity_name(&state.world, setup::active(&state.world).as_deref());
+    if let Some(entity) = model::find_by_name(&state.world, &stock_name)
+        && model::is_stock(&state.world, &entity)
+    {
+        parts.push(GpuPart {
+            verts: soup(state, &entity),
+            selected: false,
+            stock: true,
+            fill: false,
+            classes: Vec::new(),
+        });
+    }
+    parts
+}
+
+/// One docs frame, rendered and read back as an RGBA image.
+fn render_docs_frame(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    parts: &[GpuPart],
+    overlay: &[[f32; 6]],
+    cam: &Camera,
+) -> Option<RgbaImage> {
+    let mut view = View3D::new(device, FORMAT, DOC_W, DOC_H);
+    view.set_document(device, queue, parts);
+    view.set_overlay(device, queue, overlay);
+    let mvp = cam.mvp(f64::from(DOC_W) / f64::from(DOC_H));
+    let eye = cam.eye_f32();
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("docs-image-frame"),
+    });
+    view.render(queue, &mut enc, &mvp, eye, DisplayMode::ShadedEdges);
+    queue.submit([enc.finish()]);
+    let (rgba, w, h) = view.snapshot_rgba(device, queue)?;
+    RgbaImage::from_raw(w, h, rgba)
+}
+
+/// A file-name-safe step label from an operation name ("2D Pocket1" →
+/// "2d-pocket1").
+fn slug(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_owned()
+}
+
+/// Encode like a PNG file writes one (same encoder, same defaults, so the
+/// committed golden and the fresh frame differ only in what was drawn).
+fn png_bytes(img: &RgbaImage) -> Vec<u8> {
+    let mut buf = Cursor::new(Vec::new());
+    img.write_to(&mut buf, ImageFormat::Png).expect("encode PNG");
+    buf.into_inner()
+}
+
+/// Compare a fresh frame against the committed picture, counting pixels
+/// that differ beyond `DOC_EPS` per channel. `None` = no committed picture.
+fn diff_against(committed: &Path, fresh: &RgbaImage) -> Option<Result<(), (u64, String)>> {
+    let Ok(golden) = image::open(committed) else { return None };
+    let golden = golden.to_rgba8();
+    if golden.dimensions() != fresh.dimensions() {
+        return Some(Err((
+            u64::from(DOC_W) * u64::from(DOC_H),
+            format!(
+                "size {}x{} vs committed {}x{}",
+                DOC_W, DOC_H, golden.width(), golden.height()
+            ),
+        )));
+    }
+    let mut bad = 0_u64;
+    let (fresh, golden) = (fresh.as_raw(), golden.as_raw());
+    for (a, b) in fresh.as_chunks::<4>().0.iter().zip(golden.as_chunks::<4>().0.iter()) {
+        let differs = a.iter().zip(b).any(|(x, y)| {
+            i32::from(*x) - i32::from(*y) > DOC_EPS || i32::from(*y) - i32::from(*x) > DOC_EPS
+        });
+        if differs {
+            bad += 1;
+        }
+    }
+    if bad == 0 { Some(Ok(())) } else { Some(Err((bad, String::new()))) }
+}
+
+/// The example project opened through the real command, plus the step series
+/// (label, operations whose eyes are off) shared by the structural test and
+/// the pixel snapshot. Returns the picture directory too.
+fn docs_steps() -> (State, Vec<(String, Vec<String>)>, PathBuf) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let project = root.join("examples/first-part.camproj");
+    assert!(project.is_file(), "the example project is committed at {project:?}");
+    let out_dir = root.join("docs/images");
+
+    // Open the example through the real command - the same code path the
+    // File > Open menu runs.
+    let mut state = State::new();
+    state.pending.push_back(CommandKind::OpenProjectFile(project.clone()));
+    state.drain_actions();
+    assert!(
+        state.status.starts_with("opened"),
+        "the example opens clean: {}",
+        state.status
+    );
+
+    let ops: Vec<String> = setup::operation_order(&state.world)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert!(!ops.is_empty(), "the example carries operations to step through");
+    for name in &ops {
+        let entity = model::find_by_name(&state.world, name).expect("op exists");
+        assert!(
+            model::toolpath_of(&state.world, &entity).is_some(),
+            "{name} carries a generated toolpath in the committed project"
+        );
+    }
+
+
+    // Step law: step 0 shows the model and the stock blank; step n reveals
+    // the first n operations' paths, in operation order. Paths appear
+    // through the app's own display state (Show all + per-op eyes), never
+    // by editing geometry.
+    let steps: Vec<(String, Vec<String>)> = (0..=ops.len())
+        .map(|shown| {
+            let label = if shown == 0 { "blank".to_string() } else { ops[shown - 1].clone() };
+            (label, ops[shown..].to_vec())
+        })
+        .collect();
+    (state, steps, out_dir)
+}
+
+/// Non-pixel half of the docs pictures (#854): the example opens, every
+/// operation carries a toolpath, and each step draws its overlay. Runs in
+/// the default suite on every OS; the pixel compare is the snapshot below.
+#[test]
+fn docs_example_steps_through_operations() {
+    let (mut state, steps, _out_dir) = docs_steps();
+    assert!(steps.len() > 1, "the series has the blank plus one step per operation");
+    for (n, (_label, hidden)) in steps.iter().enumerate() {
+        state.show_all_paths = n > 0;
+        state.hidden_paths = hidden.clone();
+        if n > 0 {
+            assert!(
+                !interact::toolpath_lines(&state).is_empty(),
+                "step {n} draws at least one toolpath"
+            );
+        }
+    }
+}
+
+/// Pixel goldens rendered on one OS/GPU drift on another adapter, so this is
+/// release-lane (#255, #854): `#[ignore]`d out of quick/batch, run by the
+/// release tier's `gpu_render` snapshot step (`--ignored snapshot`).
+#[test]
+#[ignore = "pixel goldens: release-tier ui snapshot lane (--test gpu_render --ignored snapshot)"]
+fn docs_images_snapshot_match_the_rendered_steps() {
+    let (mut state, steps, out_dir) = docs_steps();
+    // One fixed camera for the whole series: the 100x60x20 mm stock fills
+    // most of an 800x600 frame, and the raised target keeps the rapids'
+    // clearance height (25 mm over the stock top) inside the picture.
+    let cam = Camera {
+        target: [0.0, 0.0, 10.0],
+        yaw: 0.9,
+        pitch: 0.42,
+        dist: 150.0,
+        // The goldens were rendered with the house perspective; #434's
+        // field must stay spelled out here so the pictures keep their framing.
+        projection: ProjectionMode::Perspective,
+    };
+
+    let update = std::env::var_os("UPDATE_DOCS_IMAGES").is_some_and(|v| !v.is_empty());
+    if update {
+        fs::create_dir_all(&out_dir).expect("create docs/images");
+    }
+
+    // All frames draw on this binary's one shared device, under the GPU
+    // lock - the same reason the frames above hold it.
+    let _gpu_guard = GPU_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((device, queue)) = shared_device() else {
+        eprintln!("docs images: no usable GPU adapter (even software) - skipping");
+        return;
+    };
+    let (device, queue) = (device.as_ref(), queue.as_ref());
+
+    let mut failures: Vec<String> = Vec::new();
+    for (n, (after_op, hidden)) in steps.iter().enumerate() {
+        state.show_all_paths = n > 0;
+        state.hidden_paths = hidden.clone();
+        let parts = doc_parts(&state);
+        let overlay = interact::toolpath_lines(&state);
+        if n > 0 {
+            assert!(!overlay.is_empty(), "step {n} draws at least one toolpath");
+        }
+        let Some(frame) = render_docs_frame(device, queue, &parts, &overlay, &cam) else {
+            eprintln!("docs images: readback failed - skipping");
+            return;
+        };
+        let name = format!("first-part-{n}-{}.png", slug(after_op));
+        let path = out_dir.join(&name);
+        match diff_against(&path, &frame) {
+            Some(Ok(())) => {}
+            Some(Err((bad, why))) => {
+                if update {
+                    fs::write(&path, png_bytes(&frame)).expect("write the picture");
+                } else if why.is_empty() {
+                    failures.push(format!("{name}: {bad} pixels differ"));
+                } else {
+                    failures.push(format!("{name}: {why}"));
+                }
+            }
+            None => {
+                if update {
+                    fs::write(&path, png_bytes(&frame)).expect("write the picture");
+                } else {
+                    failures.push(format!("{name}: no committed picture ({path:?})"));
+                }
+            }
+        }
+    }
+    drop(_gpu_guard);
+
+    assert!(
+        failures.is_empty(),
+        "docs pictures drifted from the rendered steps (regenerate with \
+         UPDATE_DOCS_IMAGES=1 cargo test -p camcraft-ui --test gpu_render -- --ignored snapshot):\n{}",
+        failures.join("\n")
     );
 }
 

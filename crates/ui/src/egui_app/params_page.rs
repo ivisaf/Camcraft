@@ -70,7 +70,8 @@ pub(super) fn params_fields(ui: &mut Ui, state: &mut State, tab: usize) {
                     camcraft_app::cl::CycleKind::Drill => "Drill",
                     camcraft_app::cl::CycleKind::Peck => "Peck",
                     camcraft_app::cl::CycleKind::Deep => "Deep (G83)",
-                    camcraft_app::cl::CycleKind::Tap => "Tap",
+                    camcraft_app::cl::CycleKind::Tap => "Tap (rigid)",
+                    camcraft_app::cl::CycleKind::FloatingTap => "Tap (floating holder)",
                     camcraft_app::cl::CycleKind::Bore => "Bore",
                     camcraft_app::cl::CycleKind::BackBore => "Back bore",
                 };
@@ -180,6 +181,8 @@ pub(super) fn params_fields(ui: &mut Ui, state: &mut State, tab: usize) {
     super::mill2d_more_page::fields(ui, world, params, &mut cx);
     super::holes_page::fields(ui, world, params, &mut cx);
     super::probe_page::fields(ui, world, params, &mut cx);
+    super::plasma_page::fields(ui, world, params, &mut cx);
+    super::trochoid_page::fields(ui, world, params, &mut cx);
     super::mill3d_page::fields(ui, world, params, &mut cx);
     super::multiaxis_page::fields(ui, world, params, &mut cx);
     super::rotary_page::fields(ui, world, params, &mut cx);

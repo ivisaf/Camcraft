@@ -54,18 +54,28 @@ const POSTS: &[(&str, &str, &str)] = &[
     ("Heidenhain", "heidenhain", "heidenhain"),
     ("Mazak", "mazak", "mazak"),
     ("Tormach PathPilot", "tormach", "tormach"),
+    ("Doosan DNM", "doosan-dnm", "doosan-dnm"),
+    ("Makera Carvera", "carvera", "carvera"),
 ];
 
 /// (post stem, golden, named reason): a golden a dialect must REFUSE
-/// rather than post, so it has no `.nc` there. #50: the Heidenhain
-/// DIN/ISO post has no tapping form (G206/G207 are not specced) and a
-/// tap cannot be plain moves.
-const REFUSED: &[(&str, &str, &str)] = &[("heidenhain", "tap_plate", "tapping")];
+/// rather than post, so it has no `.nc` there. Heidenhain (#51) supports
+/// tapping, but this legacy golden lacks spindle speed. Carvera (#707)
+/// cannot tap (no canned cycles or spindle reverse).
+const REFUSED: &[(&str, &str, &str)] = &[
+    ("heidenhain", "tap_plate", "tapping needs a positive integral spindle speed"),
+    ("carvera", "tap_plate", "tapping"),
+];
 
 /// The TURNING dialects (M13.5): their goldens are the lathe
 /// documents' own streams (`lathe_post.rs`); on a mill golden they
 /// must REFUSE by name - never project a Y move onto a diameter.
-const LATHE_POSTS: &[(&str, &str)] = &[("Fanuc Lathe", "fanuc-lathe")];
+const LATHE_POSTS: &[(&str, &str)] = &[("Fanuc Lathe", "fanuc-lathe"), ("Tormach PathPilot Lathe", "tormach-lathe")];
+
+/// The PLASMA dialects (#671): their goldens are the plasma streams'
+/// own (`plasma_post.rs`, `nc/tormach-plasma/`); on a mill golden they
+/// refuse by name (`plasma_post_refusals.rs`).
+const PLASMA_POSTS: &[(&str, &str)] = &[("Tormach PathPilot Plasma", "tormach-plasma")];
 
 #[test]
 fn every_lathe_post_refuses_every_mill_golden_by_name() {
@@ -158,13 +168,12 @@ fn every_builtin_posts_every_golden_byte_exact() {
 /// the whole group ahead of the contour, whose moves then die in
 /// that same guard - the stream must be shaped like a real one.
 ///
-/// #50: each hole carries its real expanded chain (approach, plunges,
-/// peck retracts, exit - the generator's `drilling::cycle` shape), so
-/// a dialect that posts drilling as plain moves (Heidenhain DIN/ISO)
-/// posts the motion a real stream would carry; the cycle dialects
-/// suppress it unchanged. `wcs` and `tap` let the Heidenhain variant
-/// drop the two records its dialect refuses by name (a non-first work
-/// offset, a tap), which `heidenhain_block_form` pins separately.
+/// #51: each hole carries its real expanded chain (approach, plunges,
+/// peck retracts, exit), matching the generator's `drilling::cycle` shape.
+/// Cycle-capable posts suppress the expanded cuts; Heidenhain keeps safe
+/// links and replaces its native cycle's cuts. The Heidenhain variant now
+/// uses this same G55 + rigid-tap stream as the others; its one remaining
+/// golden refusal is `tap_plate`, whose legacy stream does not carry spindle speed.
 fn synth_stream_with(wcs: &str, tap: bool) -> String {
     use cnc::Record as R;
     let rec = |kind: MoveKind, x: f64, y: f64, z: f64, feed: Option<f64>| {
@@ -244,7 +253,7 @@ fn synth_stream_with(wcs: &str, tap: bool) -> String {
                 }
                 chain.push(rec(MoveKind::Rapid, x, y, r_z, None));
             }
-            CycleKind::Tap => {
+            CycleKind::Tap | CycleKind::FloatingTap => {
                 chain.push(rec(MoveKind::Feed, x, y, bottom, Some(feed)));
                 chain.push(rec(MoveKind::Feed, x, y, r_z, Some(feed)));
             }
@@ -270,9 +279,13 @@ fn the_synthesized_stream_locks_the_tool_and_spindle_words() {
         serde_json::from_str(&read("assets/machines/3axis-vmc.mch")).expect("machine json");
     let write = std::env::var_os("WRITE_GOLDEN").is_some();
     for (name, cps_stem, _) in POSTS {
-        // #50: Heidenhain refuses a G55 offset and a tap by name, so
-        // its golden locks the same stream without those two records.
-        let stream = if *cps_stem == "heidenhain" { synth_stream_with("G54", false) } else { synth_stream() };
+        // #51: Heidenhain supports the full G55 + tap stream.
+        // #707: the Carvera refuses the tap the same way (no canned
+        // cycles, no spindle reverse); its G55 stands.
+        let stream = match *cps_stem {
+            "carvera" => synth_stream_with("G55", false),
+            _ => synth_stream(),
+        };
         let cps = read(&format!("assets/posts/{cps_stem}.cps"));
         let out = engine::run(&cps, &mch, &stream)
             .unwrap_or_else(|e| panic!("{name} on the synth stream: must post: {e}"));
@@ -332,7 +345,11 @@ fn every_builtin_registry_entry_compiles() {
     let names: Vec<&str> = camcraft_app::posting::BUILTINS.iter().map(|(n, _)| *n).collect();
     let mut want: Vec<&str> = POSTS.iter().map(|(n, _, _)| *n).collect();
     want.extend(LATHE_POSTS.iter().map(|(n, _)| *n));
+    want.extend(PLASMA_POSTS.iter().map(|(n, _)| *n));
     assert_eq!(names, want, "the picker lists what the registry ships");
+    for (n, _) in PLASMA_POSTS {
+        assert!(camcraft_app::posting::PLASMA_POSTS.contains(n), "{n} is a plasma dialect in the registry's own table");
+    }
     for (n, _) in LATHE_POSTS {
         assert!(
             camcraft_app::posting::LATHE_POSTS.contains(n),
@@ -352,7 +369,11 @@ const EXTENSIONS: &[(&str, &str)] = &[
     ("heidenhain", "I"),
     ("mazak", "nc"),
     ("tormach", "nc"),
+    ("doosan-dnm", "nc"),
+    ("carvera", "nc"),
     ("fanuc-lathe", "nc"),
+    ("tormach-lathe", "nc"),
+    ("tormach-plasma", "nc"),
 ];
 
 /// The top-level `extension = "..."` manifest line's value.
@@ -366,6 +387,7 @@ fn declared_extension(script: &str) -> Option<&str> {
 fn every_builtin_declares_its_controls_file_extension() {
     let mut stems: Vec<&str> = POSTS.iter().map(|(_, s, _)| *s).collect();
     stems.extend(LATHE_POSTS.iter().map(|(_, s)| *s));
+    stems.extend(PLASMA_POSTS.iter().map(|(_, s)| *s));
     let pinned: Vec<&str> = EXTENSIONS.iter().map(|(s, _)| *s).collect();
     assert_eq!(pinned, stems, "every shipped post has its extension pinned");
     for (stem, want) in EXTENSIONS {

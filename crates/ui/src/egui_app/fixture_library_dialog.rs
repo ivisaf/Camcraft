@@ -5,7 +5,9 @@
 //! type the datum's origin and rotation, Insert - one undoable
 //! `InsertFixture` through the queue; Delete removes the entry from the
 //! library file after a confirmation). A modal like the unsaved prompt;
-//! Escape or the backdrop closes it.
+//! Escape or the backdrop closes it. "Add built-in vise…" (#788) shares
+//! the modal; its body is `fixture_vise_dialog`. So does "Add
+//! accessory…" (#789, `fixture_accessory_dialog`).
 //! Provenance: our own layout over our own library format; no vendor
 //! fixture material consulted.
 
@@ -16,6 +18,8 @@ use camcraft_app::fixture_library::DatumChoice;
 use crate::state::{CommandKind, FixtureLibDialog, InsertFixtureDraft, State};
 
 use super::fields::{num, num_plain};
+use super::fixture_accessory_dialog::AccessoryAct;
+use super::fixture_vise_dialog::ViseAct;
 
 /// What a click asked for; applied after the dialog is drawn.
 enum Act {
@@ -90,6 +94,24 @@ pub(crate) fn window(ctx: &egui::Context, state: &mut State) {
                         }
                     });
                 }
+            }
+            FixtureLibDialog::Plate(d) => {
+                act = super::fixture_plate_dialog::body(ui, u, d).map(|a| match a {
+                    ViseAct::Close => Act::Close,
+                    ViseAct::Place(cmd) => Act::Insert(cmd),
+                });
+            }
+            FixtureLibDialog::Vise(d) => {
+                act = super::fixture_vise_dialog::body(ui, u, d).map(|a| match a {
+                    ViseAct::Close => Act::Close,
+                    ViseAct::Place(cmd) => Act::Insert(cmd),
+                });
+            }
+            FixtureLibDialog::Accessory(d) => {
+                act = super::fixture_accessory_dialog::body(ui, u, d).map(|a| match a {
+                    AccessoryAct::Close => Act::Close,
+                    AccessoryAct::Place(cmd) => Act::Insert(cmd),
+                });
             }
             FixtureLibDialog::Insert(d) => {
                 ui.heading("Insert from library");

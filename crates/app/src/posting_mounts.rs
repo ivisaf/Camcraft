@@ -177,7 +177,7 @@ fn post_mounts_with(world: &World, out_path: &Path, cps: Option<&str>) -> Result
         let mount = mounts.into_iter().next().unwrap_or_else(|| active(world));
         return Ok(vec![PostedMount { path: out_path.to_path_buf(), mount, posted }]);
     }
-    let started = std::time::Instant::now();
+    let started = crate::clock::Instant::now();
     let posted = post_each(world, out_path, cps, mounts);
     match &posted {
         Ok(files) => tracing::info!(

@@ -78,6 +78,7 @@ pub fn engagement(p: &OpParams, d: f64) -> Option<(f64, f64)> {
         OpParams::Pocket { stepdown, .. }
         | OpParams::Offset2D { stepdown, .. }
         | OpParams::Slot { stepdown, .. }
+        | OpParams::TrochoidalSlot { stepdown, .. }
         | OpParams::Pocket3D { stepdown, .. }
         | OpParams::MultiAxisRough { stepdown, .. } => Some((*stepdown, d)),
         OpParams::Face { stepdown: Some(ap), top_z: Some(_), stepover, .. } => {
@@ -229,6 +230,7 @@ pub fn feed_mut(p: &mut OpParams) -> Option<&mut f64> {
         | OpParams::Chamfer2D { feed, .. }
         | OpParams::Circular { feed, .. }
         | OpParams::Slot { feed, .. }
+        | OpParams::TrochoidalSlot { feed, .. }
         | OpParams::Trace { feed, .. }
         | OpParams::Pocket3D { feed, .. }
         | OpParams::Finish3D { feed, .. }

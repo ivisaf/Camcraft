@@ -31,6 +31,49 @@ pub fn cargo() -> String {
     std::env::var("CARGO").unwrap_or_else(|_| "cargo".into())
 }
 
+/// The compile-cache environment for a gate's cargo calls (#900): `RUSTC_WRAPPER=sccache` and a cache size
+/// cap, but only when `sccache` is on PATH and the caller has not chosen a wrapper (an existing
+/// `RUSTC_WRAPPER`, even an empty one, wins; `CAMCRAFT_NO_SCCACHE=1` opts out). A machine without sccache
+/// builds exactly as before. Release packaging never goes through this (it builds the shipped binary).
+pub fn cache_env(sccache: Option<&str>, wrapper_set: bool, opted_out: bool, size_set: bool) -> Vec<(&'static str, String)> {
+    let mut env = Vec::new();
+    if let Some(path) = sccache
+        && !wrapper_set
+        && !opted_out
+    {
+        env.push(("RUSTC_WRAPPER", path.to_string()));
+        if !size_set {
+            env.push(("SCCACHE_CACHE_SIZE", "20G".to_string()));
+        }
+    }
+    env
+}
+
+/// Compiler-wrapper variables the release packaging build must not inherit (#935): the shipped binary never
+/// depends on a compile cache, even when the maintainer sets `RUSTC_WRAPPER` machine-wide. Returns the ones
+/// present (`is_set` asks the environment); the release GATE tier may still use the cache, only packaging clears it.
+pub fn packaging_env_clear(is_set: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    ["RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER"].into_iter().filter(|v| is_set(v)).collect()
+}
+
+/// The first `sccache` (or `sccache.exe`) file on PATH, as a path string.
+pub fn find_sccache() -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .flat_map(|d| [d.join("sccache"), d.join("sccache.exe")])
+        .find(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+fn gate_cache_env() -> Vec<(&'static str, String)> {
+    cache_env(
+        find_sccache().as_deref(),
+        std::env::var_os("RUSTC_WRAPPER").is_some(),
+        std::env::var_os("CAMCRAFT_NO_SCCACHE").is_some_and(|v| v == "1"),
+        std::env::var_os("SCCACHE_CACHE_SIZE").is_some(),
+    )
+}
+
 /// `git -C root <args>`, stdout as text; `Err` when git fails.
 pub fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
@@ -110,10 +153,18 @@ impl Run {
             self.done.push(Done { name: s.name.clone(), ok: true, secs: 0, note: "dry run".into() });
             return Ok(());
         }
+        let cache = gate_cache_env();
+        if !cache.is_empty() {
+            println!("     (compile cache: sccache on)");
+            if std::env::var_os("CARGO_TARGET_DIR").is_some() {
+                println!("     note: CARGO_TARGET_DIR is set; sccache hashes it, so hits stop across worktrees - use the worktree's own target/ instead");
+            }
+        }
         let t0 = Instant::now();
         let file = File::create(&log).map_err(|e| format!("create {}: {e}", log.display()))?;
         let err = file.try_clone().map_err(|e| format!("log {}: {e}", log.display()))?;
         let code = Command::new(cargo())
+            .envs(cache)
             .args(&s.args)
             .current_dir(&dir)
             .stdin(Stdio::null())

@@ -20,7 +20,7 @@ use camcraft_motion::links::{Link, Links};
 use camcraft_motion::machining2d::{ContourParams, Lead, PocketStrategy, Side, contour};
 use camcraft_motion::machining3d::{Pocket3DParams, pocket3d};
 use camcraft_motion::quality::{QualitySpec, measure};
-use camcraft_motion::stock_sim::Dexel;
+use camcraft_motion::stock_sim::{Backend, Stock};
 use camcraft_motion::verify::{Mode, ToolGeom, VerifyContext, Warning, verify};
 
 fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Loop {
@@ -92,7 +92,7 @@ fn check(t: &Toolpath, region: &Region, model: Option<&[Triangle]>, mode: Mode, 
 fn descents_per_level(t: &Toolpath, region: &Region, d: f64) -> Vec<(f64, usize, usize)> {
     let (lo, hi) = region.bounds().expect("bounds");
     let top = DEFAULT_PLUNGE_HEIGHT * 0.5;
-    let mut dex = Dexel::block(lo.x - d, lo.y - d, hi.x + d, hi.y + d, top, d / 40.0).expect("stock");
+    let mut dex = Stock::block(Backend::Column, lo.x - d, lo.y - d, hi.x + d, hi.y + d, top, d / 40.0).expect("stock");
     let spec = QualitySpec::new(d);
     let planar = |m: &camcraft_motion::cl::Move| m.kind == MoveKind::Feed && (m.to.z - m.from.z).abs() <= 1e-9;
     // Each level's first and last planar cut.
@@ -103,9 +103,9 @@ fn descents_per_level(t: &Toolpath, region: &Region, d: f64) -> Vec<(f64, usize,
             _ => cuts.push((m.to.z, i, i)),
         }
     }
-    let count = |dex: &mut Dexel, a: usize, b: usize| {
-        let piece = Toolpath { moves: t.moves[a..b].to_vec(), cycles: Vec::new(), notes: Vec::new(), comps: Vec::new(), threads: Vec::new(), probes: Vec::new(), breaks: Vec::new() };
-        measure(&piece, dex, &spec).descents
+    let count = |dex: &mut Stock, a: usize, b: usize| {
+        let piece = Toolpath { moves: t.moves[a..b].to_vec(), cycles: Vec::new(), notes: Vec::new(), comps: Vec::new(), threads: Vec::new(), probes: Vec::new(), breaks: Vec::new(), plasma: None };
+        measure(&piece, dex, &spec).unwrap().descents
     };
     let mut out = Vec::new();
     let mut start = 0usize;

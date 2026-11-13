@@ -5,6 +5,9 @@
 //! [`Tool::profile`] draws; the frame is plain linear algebra. Our own
 //! design; no vendor source.
 
+use camcraft_tools::holder_profile::HolderStack;
+
+use super::body_bands::BodyBands;
 use crate::geometry::{Point3, Triangle};
 use crate::tools::{Tool, ToolGeom, ToolKind};
 
@@ -23,6 +26,10 @@ pub struct Cutter {
     pub shank_len: f64,
     pub holder_radius: f64,
     pub holder_len: f64,
+    /// A modelled tool body's bands (#835), standing in for the holder
+    /// band: the shape the fixture laws sweep and the simulation draws.
+    /// `None` reads the holder cylinder, as always.
+    pub body: Option<BodyBands>,
 }
 
 impl Cutter {
@@ -39,6 +46,27 @@ impl Cutter {
             shank_len: g.shank_len,
             holder_radius: g.holder_radius,
             holder_len: g.holder_len,
+            body: None,
+        }
+    }
+
+    /// The same cutter with its holder read as the body's band stack
+    /// `stack` (#835) - `tool_body::stack` of the tool `g` describes.
+    /// A stack that is the plain holder cylinder, or does not fit `g`
+    /// ([`BodyBands::of`]), leaves the cylinder: it can only over-report.
+    #[must_use]
+    pub fn with_body(self, g: &ToolGeom, stack: &HolderStack) -> Self {
+        Self { body: BodyBands::of(g, stack), ..self }
+    }
+
+    /// What stands above the shank as `(bottom above the tip, radius,
+    /// length)` bands, bottom-up: the body's bands, or the one holder
+    /// cylinder.
+    #[must_use]
+    pub fn holder_bands(&self) -> Vec<(f64, f64, f64)> {
+        match &self.body {
+            Some(b) => b.bands().iter().map(|h| (h.above, h.r, h.len)).collect(),
+            None => vec![(self.flute_len + self.shank_len, self.holder_radius, self.holder_len)],
         }
     }
 
@@ -61,11 +89,19 @@ impl Cutter {
     /// sits inside the square one - else the square stack. A tip that
     /// disagrees with the geometry the other laws read is never
     /// trusted to clear a move: the fallback can only over-report.
+    /// Its body bands (#835) ride along only while they still fit `g`
+    /// ([`BodyBands::of`]'s law); else the holder cylinder stands in.
     #[must_use]
     pub fn judged(g: &ToolGeom, real: Option<Self>) -> Self {
         let flat = Self::flat(g);
         match real {
-            Some(c) if Self { corner_r: 0.0, tip_angle: 0.0, ..c } == flat => c,
+            Some(c) if Self { corner_r: 0.0, tip_angle: 0.0, body: None, ..c } == flat => {
+                let fits = c.body.is_some_and(|b| {
+                    let stack = HolderStack { bands: b.bands().to_vec(), top: g.flute_len + g.shank_len + g.holder_len };
+                    BodyBands::of(g, &stack).is_some()
+                });
+                Self { body: if fits { c.body } else { None }, ..c }
+            }
             _ => flat,
         }
     }
@@ -136,7 +172,14 @@ impl Cutter {
             }
         };
         band(fl, self.shank_len, self.shank_radius);
-        band(fl + self.shank_len, self.holder_len, self.holder_radius);
+        match &self.body {
+            Some(b) => {
+                for h in b.bands() {
+                    band(h.above, h.len, h.r);
+                }
+            }
+            None => band(fl + self.shank_len, self.holder_len, self.holder_radius),
+        }
         v
     }
 }

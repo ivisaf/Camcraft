@@ -254,7 +254,7 @@ impl IconSet {
             .map(|icon| match Self::upload(ctx, *icon) {
                 Ok(handle) => Some(handle),
                 Err(err) => {
-                    eprintln!("icon {icon:?} unavailable: {err}");
+                    diag_warn!("icon {icon:?} unavailable: {err}");
                     None
                 }
             })

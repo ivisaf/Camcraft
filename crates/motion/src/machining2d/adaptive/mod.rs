@@ -81,7 +81,7 @@ pub(crate) use loops::boundary_dist;
 pub(crate) use morph::SAG as PLAN_SAG;
 
 use super::GenError;
-use front::{dist, rotate_to, tail};
+use front::{rotate_to, tail};
 use rings::circle;
 use raster::Raster;
 
@@ -191,9 +191,9 @@ struct Planner<'a> {
     laps_from: usize,
     /// ... and where the last lap begins.
     fin_from: usize,
-    /// The growth rings' planning work so far: the length of every
-    /// revolution tried (mm), held to [`budget::WORK_MAX`].
-    work: std::cell::Cell<f64>,
+    /// The growth rings' planning work so far: the length and geometry
+    /// of every revolution tried, held to the [`budget`] laws.
+    work: budget::Work,
     /// Why the plan was refused outright (the pocket hands the area to
     /// the Offset rings by this name), or `None`.
     refused: Option<String>,
@@ -202,6 +202,11 @@ struct Planner<'a> {
 /// Plan the area `reach` (the material the cutter can reach) from the
 /// legal center area `center`.
 pub(crate) fn plan(reach: &Region, center: &Region, s: &AdaptiveSpec) -> Result<AdaptivePlan, GenError> {
+    plan_within(reach, center, s, budget::Work::default())
+}
+
+/// [`plan`], its growth held to the `work` budget's limits.
+fn plan_within(reach: &Region, center: &Region, s: &AdaptiveSpec, work: budget::Work) -> Result<AdaptivePlan, GenError> {
     if !(s.r > 0.0 && s.load > 0.0 && s.bore >= 0.0 && s.smooth >= 0.0 && s.tol > -0.5) {
         return Err(GenError::Invalid("adaptive plan needs positive radius and load".into()));
     }
@@ -229,7 +234,7 @@ pub(crate) fn plan(reach: &Region, center: &Region, s: &AdaptiveSpec) -> Result<
         worst: (0.0, s.start),
         laps_from: usize::MAX,
         fin_from: usize::MAX,
-        work: std::cell::Cell::new(0.0),
+        work,
         refused: None,
     };
     if s.bore > 0.0 {
@@ -414,15 +419,6 @@ impl Planner<'_> {
             ));
         }
         ring0
-    }
-
-    /// Append a run to the walk, dropping a repeat of the joint.
-    fn push_walk(&mut self, run: &[Point2]) {
-        for &p in run {
-            if self.walk.last().is_none_or(|&l| dist(l, p) > 1e-6) {
-                self.walk.push(p);
-            }
-        }
     }
 
 }

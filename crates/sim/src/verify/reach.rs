@@ -4,7 +4,7 @@ use super::laws::{boundary_samples, dist2_seg, law_points};
 use super::rest::Rest;
 use super::types::{Mode, VerifyContext, Warning};
 
-use crate::cl::{is_vertical, MoveKind, Toolpath};
+use crate::cl::{MoveKind, Toolpath, is_vertical};
 use crate::geo2d::{Point2, Region};
 
 /// (c) Shank/holder reach against rest material, then (c3) its
@@ -34,15 +34,15 @@ pub(super) fn band_reach(
 
     // The band stack, law (c) and its fixture twin (c2) both read -
     // [ (bottom offset above the cut, radius, length) ] for shank, then
-    // holder.
-    let bands = [
-        (cx.tool.flute_len, cx.tool.shank_radius, cx.tool.shank_len),
-        (
-            cx.tool.flute_len + cx.tool.shank_len,
-            cx.tool.holder_radius,
-            cx.tool.holder_len,
-        ),
-    ];
+    // what stands above it: the holder cylinder, or a modelled body's
+    // own bands (#835) - the very stack (c2) sweeps and the simulation
+    // draws, never the cylinder enclosing it. Each group convicts a
+    // move once, the worst offender over its bands, so a body's many
+    // bands report as the one holder they stand for.
+    let shank = [(cx.tool.flute_len, cx.tool.shank_radius, cx.tool.shank_len)];
+    let holder = super::Cutter::judged(cx.tool, cx.cutter).holder_bands();
+    let groups: [&[(f64, f64, f64)]; 2] = [&shank, &holder];
+    let bands: Vec<(f64, f64, f64)> = groups.concat();
 
     if !matches!(cx.mode, Mode::Engrave | Mode::Radial | Mode::Rotary) {
         // Both boundaries matter: the region's loops carry the part
@@ -95,79 +95,108 @@ pub(super) fn band_reach(
         // h0, same r2, point p unshifted.
         // Moves law (c) convicted, for law (c3) below: a mid-turn
         // sweep of the same band on the same move is the same event
-        // reported twice, and (c)'s verdict stands.
+        // reported twice, and (c)'s verdict stands - when (c) already
+        // named the part (`shanked_part`, the worst there is). A move
+        // (c) convicted for stock only still has its sweep asked: a
+        // swing through the PART is a worse event than the stock (c)
+        // saw, and is never hidden behind it (#835 review); a stock-
+        // only sweep on such a move is the same event and is dropped.
         let mut shanked: Vec<usize> = Vec::new();
+        let mut shanked_part: Vec<usize> = Vec::new();
         for (i, m) in path.moves.iter().enumerate() {
             if m.kind == MoveKind::Rapid {
                 continue;
             }
             let pts = law_points(m, chord_tol);
             let lean = m.axis.filter(|a| !is_vertical(a));
-            for &(above, band_r, band_len) in &bands {
-                if band_r <= r || band_len <= 0.0 {
-                    continue;
-                }
-                let (offx, offy, r_band, h0) = match lean {
-                    None => (0.0, 0.0, band_r, m.to.z + above),
-                    Some(a) => {
-                        let mid = above + band_len * 0.5;
-                        let spread = (band_len * 0.5) * (a[0] * a[0] + a[1] * a[1]).sqrt();
-                        let za = m.to.z + above * a[2];
-                        let zb = m.to.z + (above + band_len) * a[2];
-                        (mid * a[0], mid * a[1], band_r + spread, za.min(zb) - band_r)
+            for group in groups {
+                let mut convicted: Option<bool> = None;
+                for &(above, band_r, band_len) in group {
+                    if convicted == Some(true) {
+                        break; // the worst offender is already named
                     }
-                };
-                // Z-window skip (M2.5 E): the law convicts only where
-                // `h0 < surface(q)`, and no column's surface stands
-                // above the stock top (`surface` ends in that `min`,
-                // and a cleared column cannot exceed the stock it was
-                // cut from). A band whose bottom stands at or above
-                // the ceiling has nothing to meet in any column -
-                // this is the same predicate read one step earlier,
-                // not an approximation: the old loop asked every
-                // sample's annulus to learn the answer it could see
-                // in the band's own numbers. A continuous-Z path (a
-                // flow line) multiplies that blind ask by its plane
-                // count; on a level ladder the test rarely fires.
-                if h0 >= cx.stock_top_z {
-                    continue;
-                }
-                let r2 = (r_band + 1e-9) * (r_band + 1e-9);
-                let mut hit = None;
-                'worst: {
-                    for p in &pts {
-                        let pc = Point2::new(p.x + offx, p.y + offy);
-                        for q in &samples {
-                            let dd = dist2_seg(*q, pc, pc);
-                            if dd > r2 || dd <= (r + cx.gouge_tol) * (r + cx.gouge_tol) {
-                                continue; // outside this band's annulus
-                            }
-                            if !in_stock(*q) {
-                                continue;
-                            }
-                            if h0 < surface(*q, i + 1) {
-                                hit = Some(part_at(*q));
-                                if hit == Some(true) {
-                                    break 'worst; // report the worst offender
+                    // A band within the cutter's radius stands in the
+                    // flutes' own kerf - upright only. Leaning, it stands
+                    // off the tip's column like any other band and is
+                    // judged, the tip-centred kerf below excusing just
+                    // the flutes' cut (#903: a plain or necked shank).
+                    if band_len <= 0.0 || band_r <= 0.0 || (lean.is_none() && band_r <= r) {
+                        continue;
+                    }
+                    let (offx, offy, r_band, h0) = match lean {
+                        None => (0.0, 0.0, band_r, m.to.z + above),
+                        Some(a) => {
+                            let mid = above + band_len * 0.5;
+                            let spread = (band_len * 0.5) * (a[0] * a[0] + a[1] * a[1]).sqrt();
+                            let za = m.to.z + above * a[2];
+                            let zb = m.to.z + (above + band_len) * a[2];
+                            (mid * a[0], mid * a[1], band_r + spread, za.min(zb) - band_r)
+                        }
+                    };
+                    // Z-window skip (M2.5 E): the law convicts only where
+                    // `h0 < surface(q)`, and no column's surface stands
+                    // above the stock top (`surface` ends in that `min`,
+                    // and a cleared column cannot exceed the stock it was
+                    // cut from). A band whose bottom stands at or above
+                    // the ceiling has nothing to meet in any column -
+                    // this is the same predicate read one step earlier,
+                    // not an approximation: the old loop asked every
+                    // sample's annulus to learn the answer it could see
+                    // in the band's own numbers. A continuous-Z path (a
+                    // flow line) multiplies that blind ask by its plane
+                    // count; on a level ladder the test rarely fires.
+                    if h0 >= cx.stock_top_z {
+                        continue;
+                    }
+                    let r2 = (r_band + 1e-9) * (r_band + 1e-9);
+                    let kerf2 = (r + cx.gouge_tol) * (r + cx.gouge_tol);
+                    let mut hit = None;
+                    'worst: {
+                        for p in &pts {
+                            // The band's disc stands at `pc`; the kerf the
+                            // flutes cleared stands at the TIP `p` (#903):
+                            // on a leaning move they part, and the disc
+                            // under the band is steel's, not the cut's.
+                            let pc = Point2::new(p.x + offx, p.y + offy);
+                            let tip = Point2::new(p.x, p.y);
+                            for q in &samples {
+                                if dist2_seg(*q, pc, pc) > r2 || dist2_seg(*q, tip, tip) <= kerf2 {
+                                    continue; // outside this band's annulus
+                                }
+                                if !in_stock(*q) {
+                                    continue;
+                                }
+                                if h0 < surface(*q, i + 1) {
+                                    hit = Some(part_at(*q));
+                                    if hit == Some(true) {
+                                        break 'worst; // report the worst offender
+                                    }
                                 }
                             }
                         }
                     }
+                    // The overhang backstop (M13.7 B): stock hidden under a
+                    // ledge stands outside every plane section, so no sample
+                    // above sees it - asked only where the section law found
+                    // nothing, it can add a conviction, never remove one.
+                    if hit.is_none()
+                        && pts.iter().any(|p| {
+                            let pc = Point2::new(p.x + offx, p.y + offy);
+                            let tip = Point2::new(p.x, p.y);
+                            rest.hidden_in_annulus(pc, tip, r + cx.gouge_tol, r_band, h0, i + 1)
+                        })
+                    {
+                        hit = Some(false);
+                    }
+                    if let Some(part) = hit {
+                        convicted = Some(convicted.unwrap_or(false) || part);
+                    }
                 }
-                // The overhang backstop (M13.7 B): stock hidden under a
-                // ledge stands outside every plane section, so no sample
-                // above sees it - asked only where the section law found
-                // nothing, it can add a conviction, never remove one.
-                if hit.is_none()
-                    && pts.iter().any(|p| {
-                        let pc = Point2::new(p.x + offx, p.y + offy);
-                        rest.hidden_in_annulus(pc, r + cx.gouge_tol, r_band, h0, i + 1)
-                    })
-                {
-                    hit = Some(false);
-                }
-                if let Some(part) = hit {
+                if let Some(part) = convicted {
                     shanked.push(i);
+                    if part {
+                        shanked_part.push(i);
+                    }
                     warns.push(Warning::ShankHit { at: i, part });
                 }
             }
@@ -186,19 +215,24 @@ pub(super) fn band_reach(
         // generator ever touched hold every pose at home and convict
         // nothing, exactly as before this law existed.
         if cx.mode != Mode::Engrave {
-            warns.extend(super::sweep::mid_turn_sweeps(
+            let sweeps = super::sweep::mid_turn_sweeps(
                 path,
                 &bands,
                 r,
                 cx.gouge_tol,
                 chord_tol,
-                &shanked,
+                &shanked_part,
                 &samples,
                 &in_stock,
                 &|q: Point2| rest.surface_steps(q),
                 &part_at,
-                &|pc, r_in, r_out, h, upto| rest.hidden_in_annulus(pc, r_in, r_out, h, upto),
-            ));
+                &|pc, tip, r_in, r_out, h, upto| rest.hidden_in_annulus(pc, tip, r_in, r_out, h, upto),
+            );
+            warns.extend(
+                sweeps
+                    .into_iter()
+                    .filter(|w| !matches!(w, Warning::SweepHit { at, part: false } if shanked.contains(at))),
+            );
         }
     }
 }
