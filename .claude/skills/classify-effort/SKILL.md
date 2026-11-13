@@ -63,7 +63,7 @@ the same way every time. Load the `gh-issues` skill for the `gh` mechanics.
 
 4. **Apply the safety floor.** At least `effort:high`, however small the
    diff, when the work can change: posted G-code, a collision or gouge
-   check, stock simulation, or geometry. Every `P0` is at least
+   check, stock simulation, or geometry. Every `P1` is at least
    `effort:high`. The floor only raises; it never lowers.
 
 5. **Stop there.** These are *not* reasons to go up a row:

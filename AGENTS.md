@@ -42,21 +42,83 @@ afterwards - the work must not bother them.
   been resolved."). Merging moves `main`, so reviewed PRs keep turning
   `conflicts` (orange). The skill `/resolve-conflicts` (`.claude/skills/
   resolve-conflicts/`) handles both sides:
-  - **Contributor mode** (`/resolve-conflicts [login]`): for the author's
-    open conflicting PRs, merge main into each branch (never rebase or
-    force-push), keep both sides where both added lines, take main's
+  - **Contributor mode** (`/resolve-conflicts [login]`): for the PR the merge
+    batch is about to merge, the one PR the author names, or one the author
+    is pushing a review fix to anyway (not every conflicting PR at once,
+    see "Refresh only at merge time"), merge main into the branch (never
+    rebase or force-push), keep both sides where both added lines, take main's
     snapshot PNGs and changelog files, run the targeted gate, push, and
     comment "ready for a re-check". If both sides changed the same logic,
     or a safety rule could be dropped, stop and report the hunk instead
     of guessing.
   - **Maintainer mode** (`/resolve-conflicts check`): re-read every
-    `conflicts` PR. Still conflicting -> ask the author once. Clean again
-    -> drop `conflicts`, then restore `merge-ready` (head unchanged), send
-    it to a delta review (only a merge-of-main commit was added), or to a
-    full `/review-prs` review (new code).
+    `conflicts` PR. Still conflicting -> leave it, and ask the author once
+    only when it is in the batch about to merge (see "Refresh only at merge
+    time"). Clean again -> drop `conflicts`, then restore `merge-ready`
+    (head unchanged, or only a clean merge of main was added - see "A clean
+    merge of main keeps its review"), send it to a delta review (a conflict
+    was resolved by hand), or to a full `/review-prs` review (new code).
   Agents in a fork run contributor mode on their own PRs at the start of
   each session, after the process-file sync; the maintainer runs `check`
-  after a batch of merges (e.g. after `/merge-ready`).
+  after a batch of merges (e.g. after `/merge-ready`). (Superseded since
+  2026-11-12: contributor mode is no longer a start-of-session duty; a
+  conflicting PR is refreshed at merge time, see "Refresh only at merge
+  time" below. The maintainer's `check` after a merge batch stands.)
+- **Refresh only at merge time** (user, 2026-11-12, decided in the question
+  dialog as "Refresh only at merge time", issue #1221: "We need to maybe
+  modify the merge-ready skill to be better at analyzing merge-order and
+  batch how the PR's are going in to generate as little delta pr's as
+  possible. we spend a shit ton of tokens on uncessary deltas." and "Stop
+  the other sessions work as well for now until we can figure out how it
+  stops causing conflicts"). A conflicting PR carries `conflicts` and is
+  otherwise left alone: by its author's agents, by maintenance, by
+  reviewers. It takes `git merge origin/main` only when it is the next PR
+  in a merge batch, or when its author pushes a review fix anyway and
+  chooses to. The merging session collects the ready PRs and runs
+  `cargo xtask merge-plan <PR>...` (or `--label merge-ready`). The planner
+  simulates the merges with `git merge-tree` (nothing is checked out,
+  built or pushed) and orders them: wave 1 merges as one batch with no
+  refresh and no delta review; wave 2 is refreshed one PR at a time, each
+  merged before the next is refreshed, against the main of that moment.
+  The `/resolve-conflicts` contributor mode is the tool for that refresh.
+- **A clean merge of main keeps its review** (issue #1221, 2026-11-12).
+  If every commit since the reviewed head is a merge of `main` whose
+  `git show --remerge-diff` is empty, the tree is exactly what merging the
+  reviewed head would give: the review stands and the label is restored
+  without an agent, and no delta review runs. `cargo xtask merge-plan
+  --delta <PR> --reviewed <sha>` reports it (SAME). Hand edits confined to
+  rule-settled files (`.claude/PROCESS_VERSION`, `CHANGELOG.md`,
+  `RECOMMENDED.md`, `Cargo.lock`, snapshot PNGs taken from main) are read by
+  the merging session itself (MECHANICAL). Only a conflict resolved by hand
+  gets a delta review of its remerge-diff (DELTA), and new commits get a
+  review of those commits (NEW CODE).
+- **Only collaborators' reviews count** (issue #1320, 2026-11-12, decided in
+  the question dialog: "Any collaborator review counts"; the maintainer in
+  chat: "everyone counts. everyone needs to get merged, mkinney and i are
+  coolaboration across the world on the same code base"). A
+  `<!-- pr-reviewer: ... -->` or `<!-- review-cost: ... -->` marker counts
+  only in a review or comment made by a collaborator of the repository the
+  PR targets (`NeoTech/Camcraft`, also in a fork): an account with write
+  access, `gh api repos/NeoTech/Camcraft/collaborators --jq '.[] |
+  select(.permissions.push) | .login'`. `merge-ready` counts only when a
+  collaborator set it. This holds for a collaborator's own PRs as well as
+  others'; the independence that still applies is the one above, that the
+  review is done by an agent that did not write the change. A marker or label
+  from an account that is not a collaborator does not count: a
+  contributor's pre-check is a plain comment without the marker.
+  A review that requests changes on a head stays open until it is addressed:
+  by a new head that a collaborator's review then clears, or by the reviewer
+  who asked withdrawing the request in a comment. A `merge-ready` label or a
+  "ready" review from another collaborator on the same head does not
+  override it. A PR whose current head carries both a collaborator review
+  requesting changes and a `merge-ready` label (or `merge-ready` beside
+  `needs-rework`) is a disagreement: `/merge-ready` reports it and does not
+  offer it; no agent removes either label; the two collaborators settle it
+  on the PR.
+  `/review-prs`, `/resolve-conflicts check`, `/merge-ready` and the
+  PR-reviewer agent all filter on the collaborator list. (Superseded since
+  2026-11-12, later the same day: issue #1207's "only the owner's reviews
+  count", "No, only ours count", which counted the owner's account alone.)
 - **Side work rides subagents.** All testing, documentation, and knowledge
   graphing (the graphify updates) are done by subagents dispatched as
   subtasks, never inline: their completion notification is what triggers
@@ -85,20 +147,57 @@ go to `CHANGELOG.md`.
   where the two differ.
 - **Pick.** `gh issue list --state open --search "-label:claimed -label:blocked -label:in-review -label:needs-research -label:\"P?\""`
   (then drop any whose comments hold a live contributor claim - "A claim
-  comment is a claim", below) and take the highest priority first: `P0` (wrong output, gouge, crash,
-  data loss) before `P1` (wrong behaviour a user hits) before `P2` (owed
-  polish), then the oldest. User-reported bugs outrank owed work.
+  comment is a claim", below) and take the lowest priority number first (`P1` before `P2` ... before
+  `P9`, "Priorities" below), then the oldest. User-reported bugs outrank
+  owed work of the same number. An issue with no priority is untriaged,
+  not lowest: it is triaged ("Priorities") before any pick.
+- **Priorities: `P1`..`P9`, lower is picked first** (user, 2026-11-12: "We
+  might need a P1-P9 prioritization system now.. we're having issues with
+  scope creep throughout the issue list"; scale chosen as "replace P0/P1/P2
+  with nine levels; agents keep filing and rating their own issues", and
+  read as "P4 is our normal; P1 to P3 is fix now"). `P?` (next point) is
+  outside the scale.
+
+  | Label | Means | Was |
+  |---|---|---|
+  | `P1` | Unsafe or wrong output: a gouge or collision that passes, wrong posted G-code, a crash, data loss | `P0` |
+  | `P2` | Main is broken, or a regression in the last release with no workaround: main does not build, a gate on main is red, the app cannot open a project it saved | red-gate `P1` |
+  | `P3` | Wrong behaviour a user hits, with a workaround: a legal program refused, a misleading message, a dialog that cannot do what it says | `P1` bugs |
+  | `P4` | Work the maintainer asked for, for the next cut | `P1` enhancements he opened |
+  | `P5` | The agent surface and the tooling keep up with what shipped: an MCP tool or skill row for a shipped command, a gate or process fix that blocks contributors | `P1` MCP / process |
+  | `P6` | Accepted enhancements, not scheduled | other `P1` enhancements |
+  | `P7` | Owed polish and small fixes: wording, layout, a missing test, a refusal that could say more | `P2` bugs and polish |
+  | `P8` | Larger ideas that need design or research before code | `P2` enhancements, `effort:max` |
+  | `P9` | Someday: not picked while anything else is free | - |
+
+  - `P1`-`P3` are fix-now work and are for defects only: "wanted" is never
+    a reason for them. Only `P1` and `P2` hold a release cut back
+    (maintainer's choice, question dialog, 2026-11-12: "only P1 and P2
+    block a release cut"). A minor/major cut does not start while any `P1` or `P2` issue is open; a `P3` or lower never holds one. A `P3` is worked ahead of planned
+    work, but a cut does not wait for it.
+  - `P4` is set only where the maintainer asked for the work in his own
+    words; the issue quotes them.
+  - A follow-up found while working or reviewing is `P7` unless it is a
+    defect (then `P1`-`P3` by the table).
+  - An agent filing an issue sets exactly one of `P1`..`P9` by this table,
+    never `P?`.
+  - **No priority means untriaged.** A human-filed issue without a
+    priority is not the lowest: the first agent that reads it for a pick
+    sets its priority by this table (with its effort label) before
+    sorting, so a user-reported gouge bug is never picked last. An issue
+    found with two numbers is reported to the maintainer and read by the
+    lower number meanwhile.
 - **`P?` is paused, not prioritised** (user, 2026-11-09: "a P? label that
   holds an issue paused until maintainer tells it to be changed"). An issue
   labelled `P?` is held by the maintainer: Pick never takes it, no lane
   slot works it, no agent claims, researches, files sub-issues for or
   re-prioritises it, and the bug/enhancement lanes skip it the same way.
-  It carries `P?` *instead of* a `P0`/`P1`/`P2` label, never beside one -
+  It carries `P?` *instead of* a `P1`..`P9` label, never beside one -
   an agent that finds both reports it rather than choosing. Only the
   maintainer swaps `P?` for a real priority (or closes the issue); until
   then agents may only read it, link it, and comment facts that belong on
   it (e.g. a duplicate or a related fix), without changing its labels.
-  An agent filing a new issue never uses `P?` - it picks `P0`/`P1`/`P2`.
+  An agent filing a new issue never uses `P?` - it picks one of `P1`..`P9`.
 - **Two lanes, two issues each** (user, 2026-11-07: "open up the issue
   limit to 2 bugs 2 enhancements.. as we are now just working on the latest
   issues and not the old ones"). At most four issues are worked at once: two
@@ -109,7 +208,7 @@ go to `CHANGELOG.md`.
   review finding afterwards rides the same issue and takes no new slot, so a
   `feat` waiting for its cut never holds a lane. The bug lane picks by the order above. The enhancement lane has its
   own order, which overrides Pick's: user-filed issues (no `source:agent`)
-  first, then `P1` before `P2`, then the oldest, so old owed work is not
+  first, then the lower number, then the oldest, so old owed work is not
   starved by fresh bugs. When a slot frees, refill that lane at once. Each
   slot is its own worktree and branch (check free disk first: each
   worktree's `target/` is 10-20 GB). Merging follows "Done on a branch"
@@ -126,6 +225,14 @@ go to `CHANGELOG.md`.
   outside the working folder u started up in?"), and are removed once their
   PR is pushed. One issue, one branch; every commit for it lands there, never
   on `main`.
+- **A worktree agent never touches the main checkout's HEAD or tree.** It
+  runs `git fetch origin` and `git worktree add ... origin/main` and nothing
+  else there: no `switch`, `pull`, `merge`, `reset`, `checkout` or `stash` in
+  `C:\...\Claude-001` (any checkout the maintainer works in). The main checkout
+  may be running a gate (`cargo xtask gate` reads HEAD and the working tree
+  before and after, and prints VOID if a pull moved them mid-run, #1201), so a
+  worker's pull there voids that run for everyone. The first form above is for
+  the main session only, when it is the one owning `main`.
 - **A fork syncs from upstream at each cut tag, not continuously** (user,
   2026-11-09: "If we are on a forked repository (check for upstream), we
   pull from upstream, with every detected cut tag ex. jump from 0.14 to
@@ -157,7 +264,8 @@ go to `CHANGELOG.md`.
     `.cargo/config.toml` (its `cargo xtask` alias), and the wrappers that
     forward to it - `scripts/gate.ps1`, `scripts/gate.sh`,
     `scripts/release.ps1`, `scripts/collect-decisions.ps1`,
-    `scripts/collect-decisions.sh` - changes between releases, and a fork's
+    `scripts/collect-decisions.sh`, and `crates/ui/AGENTS.md` (the UI
+    steering document, #1121) - changes between releases, and a fork's
     agents must follow the current rules.
     At the start of every session in a fork, before claiming work,
     compare `git show upstream/main:.claude/PROCESS_VERSION` with the
@@ -165,7 +273,7 @@ go to `CHANGELOG.md`.
     those files: `git checkout upstream/main -- AGENTS.md .claude/agents
     .claude/skills .claude/PROCESS_VERSION xtask .cargo/config.toml
     scripts/gate.ps1 scripts/gate.sh scripts/release.ps1
-    scripts/collect-decisions.ps1 scripts/collect-decisions.sh`, commit as `chore(process): sync
+    scripts/collect-decisions.ps1 scripts/collect-decisions.sh crates/ui/AGENTS.md`, commit as `chore(process): sync
     process files to upstream PROCESS_VERSION <n>` on a `process-sync`
     branch, and merge
     it into the fork's `main` (or open a PR there if the fork protects
@@ -241,7 +349,7 @@ go to `CHANGELOG.md`.
     It only sets a missing label; it never lowers or replaces one.
   - **Safety floor.** Anything that can change posted G-code, a collision
     or gouge check, stock simulation or geometry is at least
-    `effort:high`, however small the diff; every `P0` is at least
+    `effort:high`, however small the diff; every `P1` is at least
     `effort:high`. The Prime Directive is never handed to the cheapest
     tier.
   - **Who works it.** The main session picks by Pick and the lanes as
@@ -387,6 +495,19 @@ go to `CHANGELOG.md`.
   finding, a needed `git merge origin/main` or any other change first turns
   it back into a draft (`gh pr ready <M> --undo`), says why in a PR
   comment, is pushed and re-gated, and only then is flagged ready again.
+  Superseded since 2026-11-12 for the merge-time refresh only (the
+  maintainer's decision in the question dialog, "Refresh only at merge
+  time", issue #1221): a refresh that is only a merge of main with no hand
+  edits (`cargo xtask merge-plan --delta` says SAME) is not new work on the
+  PR, so the review stands and the refresh is pushed without the draft
+  round-trip. A merge-time refresh with hand edits (MECHANICAL after the
+  merging session's own read, or DELTA) is new work: a ready PR goes back to
+  draft first, is pushed, and is reviewed as usual. Either way the merging
+  session flags the PR ready again right before merging it (`gh pr ready
+  <M>`), with one PR comment naming the class (SAME, MECHANICAL or DELTA) and
+  the review it stands on, and nothing is pushed after that flag. A PR under
+  an orange `conflicts` verdict is a draft (review-prs), so that flag is what
+  makes it mergeable again.
   Merging (by the main session for fix/docs PRs, at the cut for `feat`)
   takes only a ready PR, never a draft.
 - **Never close by hand without a commit**, except: a duplicate (link the
@@ -480,8 +601,11 @@ drive CamCraft headlessly. A PR that adds a user-facing command also adds its
 MCP tool (and script verb where it fits) in `crates/app/src/mcp/`, or files a
 `source:agent` follow-up issue `MCP: <command>` and names it in the PR body. Every
 MCP issue (an `MCP:` title, or work on `crates/app/src/mcp/` or the camcraft-mcp
-skill) carries `area:mcp` and is `P1`, unless the maintainer paused it `P?` (user, 2026-11-10: "find all MCP tickets
-and make P1"), so the agent surface keeps up with the GUI. MCP
+skill) carries `area:mcp`. Owed agent-surface work (a tool, script verb or
+skill row for a shipped command) is `P5` (user, 2026-11-10: "find all MCP
+tickets and make P1" - the top level then, `P5` since the scale became
+P1-P9 on 2026-11-12); a defect in MCP code is rated by severity like any
+defect, `P1`-`P3`. A paused one stays `P?`. This keeps the agent surface up with the GUI. MCP
 tools call the same undoable commands the GUI uses, so undo/redo history and
 invariants hold headlessly.
 
@@ -497,6 +621,8 @@ optimization (M5.3-era), not a current requirement; if a type ever adopts
 must carry a delete hook that frees everything it owns.
 
 ## Assets
+
+UI work also follows `crates/ui/AGENTS.md` (the UI steering document; it restates the laws here, nothing more).
 
 `assets/ui/` holds PNGs for toolbar and tree icons; `assets/ui/fonts/` holds
 the fonts. The UI must render them — loading the files alone isn't enough;
@@ -553,6 +679,22 @@ Phase 4 refactors the codebase for reuse; work in the shape it is heading to:
   goes in the module that will become its crate's seed, and cross-domain
   calls go through the seams that will become crate APIs - not through
   private helpers of another domain.
+- **`app` holds the document, nothing else** (maintainer, 2026-11-11: "high
+  cohesion, low coupling, because every gate is costly"). New code goes in
+  `crates/app/src` only if it reads or writes the ECS world, the project
+  file, a command, MCP or the CLI. Code that works only on domain values
+  (cl, geometry, tools, post, sim, motion types) goes in the crate that owns
+  them, and `app` re-exports it. A reviewer checks this from the new file's
+  `use` lines: if none names one of those five things, the file is in the
+  wrong crate.
+- **No new dependency between our crates without a decision.** A
+  `camcraft-*` entry added to `[dependencies]` or `[dev-dependencies]` in any
+  `crates/*/Cargo.toml` needs a `docs/decisions/` entry in the same PR. The
+  entry lists the imported items, says why the caller cannot pass the value
+  in instead (a parameter, a closure, a recorded file), and names what now
+  rebuilds when the dependency changes. An edge that would carry fewer than
+  five items is not added: the caller passes the value in. (The wording of
+  the five-item clause is the maintainer's to confirm.)
 - **Stays buildable everywhere.** No platform-specific assumptions in core
   code (M4.2 ships Windows/Linux/macOS builds from the same source).
 - **Neutral naming.** M4.3 renamed the product label hsmworks to camcraft
@@ -563,10 +705,20 @@ Phase 4 refactors the codebase for reuse; work in the shape it is heading to:
 
 ## Testing
 
-`crates/app/tests/` (app + commands) and `crates/ui/tests/` (UI/event tests
-which spawn the real app via `test_harness.rs`; helpers in `ui::test_harness`,
-app-level fixtures in `crates/app/tests/common/mod.rs`). Each future subcrate
-carries its own tests inside its crate (M4.1).
+`crates/app/tests/` (tests of what `crates/app/src` defines: commands, the
+project file, the schema, operations, MCP and the CLI) and `crates/ui/tests/`
+(UI/event tests which spawn the real app via `test_harness.rs`; helpers in
+`ui::test_harness`, app-level fixtures in `crates/app/tests/common/mod.rs`).
+Each future subcrate carries its own tests inside its crate (M4.1).
+
+- **A test lives with the code it tests.** A new test file goes in the lowest
+  crate that provides everything it imports, and its Gate map names that
+  crate (`camcraft_post::post::engine`, not `app::post`). A file in
+  `crates/app/tests/` must import something `crates/app/src` defines; a test
+  that uses only another crate's re-exports (`app::post`, `app::verify`,
+  `app::machining2d`) belongs in that crate's `tests/`. A test that needs
+  another crate's output reads a recorded file (`.cl`, `.cnc`) rather than
+  importing that crate's generator.
 
 **Three gate tiers - never hours per change** (user, 2026-11-07: "break up
 those test suites so we don't have to run hours on hours of tests"). One
@@ -745,7 +897,9 @@ calendar. `release.yml` builds and publishes on `vX.Y.0` tags only (~30-40
 billed Actions minutes each); PRs run no Actions (no `pull_request`
 trigger), so the PR flow costs no minutes.
 
-**Fixes are tested in the background.** After a fix merges, the main
+**Fixes are tested in the background.** After a fix merges (or, one gate
+per batch since 2026-11-12, after a merge batch of "Refresh only at merge
+time" as a whole, not after each merge), the main
 session dispatches a gate-runner subagent to run the batch tier on
 `origin/main` in the MAIN checkout, reusing its `target/` - never a fresh
 worktree, whose own ~25 GB `target/` once filled the disk - and does not
@@ -756,11 +910,11 @@ in progress and no other gate running; otherwise it waits, and the main
 session starts no cut until a running gate has finished. The main session
 therefore does its own issue work in a worktree while a gate runs. Before
 dispatching, check the free disk space; `cargo clean` the main `target/`
-only when no gate or cut is running and it is past ~60 GB. A red result is a new issue (`P0` if it is wrong output or a
-gouge, else `P1`, `source:agent`) naming the failing tests and the merge
+only when no gate or cut is running and it is past ~60 GB. A red result is a new issue (`P1` if it is wrong output or a
+gouge, else `P2`, `source:agent`) naming the failing tests and the merge
 that broke them. A red result does not revert the merge by itself; the
 issue is worked in the normal order, and a minor/major cut does not start
-while a `P0` it opened is unfixed. The full release tier runs only at a
+while any `P1` or `P2` issue is open (a `P3` or lower never holds one). The full release tier runs only at a
 minor/major cut. A fix-only stretch produces no build; to hand-test one, run
 `cargo xtask release --version <next> --no-tag --skip-gate` (or the wrapper
 `scripts/release.ps1 -Version <next> -NoTag -SkipGate`) locally on a scratch
@@ -776,9 +930,10 @@ a tag"):
    review by a subagent that did not write it (`/code-review` on the PR, or
    a reviewer briefed with the diff, not the author's conclusion); findings
    are fixed on that branch and pushed. A PR that no longer merges cleanly
-   takes `git merge origin/main` on its branch (an older branch that still
-   appends to `RECOMMENDED.md` keeps both sides), is re-gated (quick), and
-   pushed. Then
+   is refreshed at merge time, in the order `cargo xtask merge-plan` gives
+   ("Refresh only at merge time"): `git merge origin/main` on its branch (an
+   older branch that still appends to `RECOMMENDED.md` keeps both sides), is
+   re-gated (quick), and pushed. Then
    `gh pr merge M --merge --delete-branch` - merge commits, never squash or
    rebase, so branch commits keep the hashes the issue comments name. A
    worktree still holding the branch is removed first (the local delete
@@ -815,6 +970,18 @@ a tag"):
    If the diff is not empty, do not tag: something reached main mid-cut;
    start the cut again from step 2 on a fresh release branch. Comment
    `shipped in vX.Y.Z` on every issue the cut closed.
+5. **Check the documentation site** (#688). The same tag run regenerates
+   the Zola site in `site/` from the tagged tree and deploys it to GitHub
+   Pages (`release.yml` jobs `site` and `pages`; `pages` waits for
+   `publish`, so the site's download links never point at a missing
+   release). The browser build (`wasm`, #1103) is served under `/app/`;
+   a failed wasm build leaves `/app/` as the "not part of this copy" page
+   and a warning, not a failed cut. Nothing is committed for it and no
+   trigger is added. The cut is done once the run's `pages` job is green
+   and `https://neotech.github.io/Camcraft/` shows "CamCraft X.Y.Z"; a
+   red `pages` job is re-run (Actions "Re-run failed jobs"), never fixed
+   by moving the tag. Preview locally with `zola build` in `site/`
+   (`site/README.md`).
 
 **`main` is protected on GitHub** (user, 2026-11-07: "so we don't get
 unauthorized pushes into main instead they follow the rules"): every change
@@ -834,10 +1001,16 @@ run on demand (`/review-prs`, or `/review-prs <N>` for one PR) and on a loop
 (`/loop 10m /review-prs`, every 10 minutes). The agent trial-merges the PR with current main in
 its own worktree, builds, runs the suites it touches and clippy, checks this
 file's laws, and posts a plain review **comment** whose first line is
-`<!-- pr-reviewer: <head sha> -->` (the marker that stops a second review of
+`<!-- pr-reviewer: <head sha> -->` (counted only when its author is a collaborator, see "Only collaborators' reviews count"; the marker that stops a second review of
 the same push), and sets the review label (below). It never approves, requests changes, merges or pushes:
 the user approves and merges an outside PR by hand ("make sure u leave a
-comment and allow us to approve it manually"). **Never two PR reviews at
+comment and allow us to approve it manually") - that stays for the PRs of
+accounts that are not collaborators; a collaborator's PR is handled like our
+own: reviewed here, then merged by any collaborator's session through
+`/merge-ready` (maintainer, 2026-11-12, "Both collaborators" may merge; cuts
+and tags stay with the maintainer). A merge batch is run with `/merge-ready`
+(`.claude/skills/merge-ready/`), which plans the order with `cargo xtask
+merge-plan`. **Never two PR reviews at
 once** ("make sure we are not running concurrent PR reviews"): one PR per
 `/review-prs` run, guarded by the lock `.claude/pr-review.lock` (`<N> <sha>
 <UTC>`) - a run that finds a lock younger than 90 min stops; an older one is

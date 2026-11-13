@@ -8,6 +8,8 @@ use std::path::Path;
 
 use regex::escape;
 
+use crate::assets;
+use crate::path_mods;
 use crate::plan::{ALL_CRATES, J, Plan, SHARED, Step, T, pkg, ps_cmp, ps_sorted};
 use crate::scan::{self, re};
 
@@ -106,6 +108,13 @@ pub fn plan(root: &Path, diff: &Diff, heavy: bool) -> Result<Quick, String> {
                 Some(x) if x != "mod" && x != "tests" => x.to_string(),
                 _ => String::new(),
             };
+            // #1021: a `#[path]`-included file is also its parent's submodule; both names are
+            // mapped (a union), so resolving the includer can only ever add suites.
+            if let Some((pm, ps)) = path_mods::included_as(root, &d, &rest)?
+                && (pm.as_str(), ps.as_str()) != (m.as_str(), sub.as_str())
+            {
+                p.mods.push((d.clone(), pm, ps));
+            }
             if !["lib", "main", "bin"].contains(&m.as_str()) {
                 p.mods.push((d, m, sub));
             }
@@ -116,7 +125,8 @@ pub fn plan(root: &Path, diff: &Diff, heavy: bool) -> Result<Quick, String> {
     });
     p.mods.dedup();
     map_modules(root, &mut p, &mut plan.notes)?;
-    describe(&p, heavy, xtask, &mut plan.notes);
+    let unmapped = map_assets(root, diff.changed, &mut p)?;
+    describe(&p, heavy, xtask, &unmapped, &mut plan.notes);
     plan.steps = steps(p, heavy, xtask);
     Ok(Quick::Plan(plan))
 }
@@ -171,13 +181,33 @@ fn map_modules(root: &Path, p: &mut Picks, notes: &mut Vec<String>) -> Result<()
     Ok(())
 }
 
+/// Changed post scripts / machine files -> the suites that post through them; returns the assets no
+/// suite covers (reported by `describe`, never skipped silently).
+fn map_assets(root: &Path, changed: &[String], p: &mut Picks) -> Result<Vec<String>, String> {
+    let mut unmapped = Vec::new();
+    for a in assets::changed_assets(changed) {
+        if !root.join(&a.path).is_file() {
+            continue; // deleted: nothing left to post through
+        }
+        let hits = assets::suites_for(root, &a)?;
+        if hits.is_empty() {
+            unmapped.push(a.path.clone());
+        }
+        for (k, why) in hits {
+            p.whole.insert(k.clone());
+            p.why.entry(k).or_insert_with(|| format!("{} {why}", a.path));
+        }
+    }
+    Ok(unmapped)
+}
+
 fn by_fn(set: &BTreeSet<(String, String)>) -> Vec<(String, String)> {
     let mut v: Vec<_> = set.iter().cloned().collect();
     v.sort_by(|a, b| ps_cmp(&a.0, &b.0).then_with(|| ps_cmp(&a.1, &b.1)));
     v
 }
 
-fn describe(p: &Picks, heavy: bool, xtask: bool, notes: &mut Vec<String>) {
+fn describe(p: &Picks, heavy: bool, xtask: bool, unmapped: &[String], notes: &mut Vec<String>) {
     notes.push("quick plan:".into());
     for d in ps_sorted(p.libs.iter().cloned()) {
         notes.push(format!("  {d} lib (unit tests)"));
@@ -203,7 +233,10 @@ fn describe(p: &Picks, heavy: bool, xtask: bool, notes: &mut Vec<String>) {
     if xtask {
         notes.push("  xtask (unit tests) - xtask/ changed".into());
     }
-    if p.libs.is_empty() && p.whole.is_empty() && p.fns.is_empty() && p.ign.is_empty() && !xtask {
+    for a in unmapped {
+        notes.push(format!("  {a}: NO SUITE covers this asset - nothing posts through it in crates/*/tests"));
+    }
+    if unmapped.is_empty() && p.libs.is_empty() && p.whole.is_empty() && p.fns.is_empty() && p.ign.is_empty() && !xtask {
         notes.push("  nothing in crates/ changed: no tests to run".into());
     }
 }

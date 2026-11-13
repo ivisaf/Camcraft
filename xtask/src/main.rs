@@ -1,13 +1,22 @@
 //! `cargo xtask`: the workspace's process tooling, one implementation for Windows, macOS and Linux -
-//! the gate tiers (`gate quick|batch|release|test`), the decision collection (`decisions`), the
-//! Windows portable zip (`package`) and the release cut (`release`).
+//! the gate tiers (`gate quick|batch|release|test`), the decision collection (`decisions`), the icon
+//! rasteriser (`icons`, #661), the Windows portable zip (`package`) and the release cut (`release`).
 //! Provenance: our own build and process law (AGENTS.md "Three gate tiers", "Test the change",
 //! release step 2), replacing the scripts/gate.*, collect-decisions.* and release.ps1 twins (#748, #749).
 
+mod assets;
 mod braces;
+mod checkout;
 mod decisions;
 mod exec;
+mod icon_font;
+mod icons;
+mod merge_delta;
+mod merge_plan;
+mod merge_plan_git;
+mod merge_plan_out;
 mod package;
+mod path_mods;
 mod plan;
 mod quick;
 mod release;
@@ -16,9 +25,21 @@ mod release_pack;
 mod scan;
 mod single;
 #[cfg(test)]
+mod icons_tests;
+#[cfg(test)]
 mod release_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod gate_maps_tests;
+#[cfg(test)]
+mod asset_tests;
+#[cfg(test)]
+mod checkout_tests;
+#[cfg(test)]
+mod merge_plan_tests;
+#[cfg(test)]
+mod merge_plan_det_tests;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -30,9 +51,15 @@ usage:
   cargo xtask gate release                         everything, plus the --ignored heavy lanes and the ui snapshot lane
   cargo xtask gate test <filter> [--crate c] [--binary b] [--exact]   exactly the matching test(s)
       any gate: --dry-run (or --plan) prints the plan without running it. Logs: gate-logs/<tier>-<timestamp>/.
+  cargo xtask icons [--check | --sheet <out.png> [--px N] [--zoom N]]
+                                                   rasterise assets/ui/svg/*.svg to the 32 px PNGs (#661), check
+                                                   them against their masters, or draw a 16 px contact sheet
   cargo xtask decisions --version X.Y.Z            gather docs/decisions/*.md into RECOMMENDED.md
   cargo xtask release --version X.Y.Z --no-tag [--title T] [--skip-gate] [--skip-build] [--installer] [--dry-run]
                                                    the release cut on release/vX.Y.Z (scripts/release.ps1's phases)
+  cargo xtask merge-plan <PR>... | --label <name> [--json] | --delta <PR> --reviewed <sha>
+                                                   the merge order of open PRs (waves, refresh only at merge time)
+                                                   or the delta class of a PR since a reviewed head (#1221)
   cargo xtask package [--version X.Y.Z] [--out dist] [--bin-dir target/release] [--dry-run]
                                                    stage the Windows portable tree and write camcraft-<ver>-win-x64.zip
                                                    (no bump/commit/build; version defaults to post.exe --version;
@@ -117,6 +144,8 @@ fn run(args: &[String]) -> Result<i32, String> {
             println!("{}", decisions::collect(&root(), &version)?);
             Ok(0)
         }
+        Some("icons") => icons::run(&root(), &args[1..]),
+        Some("merge-plan") => merge_plan_git::run(&root(), &args[1..]),
         Some("package") => {
             let a = package::parse(&args[1..]).map_err(|e| format!("{e}\n{USAGE}"))?;
             Ok(package::run(&root(), &a))
