@@ -371,7 +371,18 @@ go to `CHANGELOG.md`.
     what it learned and where any held work lives, raises the label one
     step (`low` -> `medium` -> `high` -> `max`), and releases the claim; the
     next pick goes to the higher tier. At most one escalation per run.
-    Only the maintainer lowers an effort label.
+    Only the maintainer lowers an effort label. A PR whose second full
+    review is again `needs-rework` is not reworked a third time on the
+    same tier: the issue's label rises one step and the next rework goes
+    to that tier (`max` cannot rise: `blocked`, the maintainer decides)
+    (#1414: bounded review rounds instead of a loop on a too-cheap tier).
+  - **Review by risk spots, not samples** (#1414). The worker's PR body
+    names 3-5 risk spots, each with the reference to compare it with
+    (the issue's Done means, the provenance source, or the function or
+    law it mirrors); the reviewer compares each one step by step and
+    says what it compared with. A review that only samples a large diff
+    finds little: in a sister project the one real finding of a period
+    came only from named spots.
   - **Measured.** The PR's `review-cost` comment names the effort and
     whether it escalated, so the table can be recalibrated from data
     (escalation rate and cost per tier), not by feel.

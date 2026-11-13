@@ -70,12 +70,25 @@ something under the safety floor that your label didn't account for):
   failed (test names, error lines), and where the held work lives.
 - Report "escalated N to effort:<next>" to the caller and stop. One
   escalation per run; never lower a label.
+- The same applies to review rounds: when you are sent to rework a PR
+  whose second full review is again `needs-rework`, do not rework it a
+  third time on your tier - raise the label one step and stop as above
+  (AGENTS.md "Escalation, never silent", #1414).
 
 ## 5. Done on the branch
 - Commit (`<type>(<scope>): <subject>`, body ends `Fixes #N`, plus the
   session's Co-Authored-By line), push, open a **draft** PR with
   `--body-file`: what changed, how tested (pinning tests named), what was
-  not exercised, `Changelog:` line, `Effort: <tier>`, `Fixes #N`.
+  not exercised, `Risk spots:` (below), `Changelog:` line,
+  `Effort: <tier>`, `Fixes #N`.
+- `Risk spots:` 3-5 lines, `file:function - what could go wrong -
+  reference to compare with` (the issue's Done means, the public source
+  in the provenance line, or the existing function / law the change
+  mirrors). Pick the places a reviewer must not skip: new geometry or
+  formulas, anything that reaches posted G-code or a collision/gouge
+  check, project-file writing and round-trip, state across frames,
+  undo/redo and abort paths. The reviewer compares exactly these
+  (AGENTS.md "Review by risk spots, not samples", #1414).
 - Swap `claimed` for `in-review`; comment
   `fix on issue/N-<slug> · PR #M · pinned by <tests> · merges when reviewed`.
 - Remove the worktree and its target dir.

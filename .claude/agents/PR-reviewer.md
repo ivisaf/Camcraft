@@ -87,7 +87,17 @@ merge.
    timeout (up to 10 min per command, split long runs by binary) - never
    background a run and wait on it: reviewers have stalled for an hour
    waiting on a run that had already died. Time box ~40 min of build+test.
-5. **Law check against AGENTS.md** - for each, cite file:line on a finding:
+5. **Risk spots, not samples** (AGENTS.md "Review by risk spots, not
+   samples", #1414). Take the PR body's `Risk spots:` list; when it is
+   missing, choose the 3-5 riskiest hunks yourself (new geometry or
+   formulas, posted G-code, collision/gouge checks, project-file writing
+   and round-trip, state across frames, undo/redo and abort). For each,
+   read the hunk and its reference (the issue's Done means, the public
+   source in the provenance line, the function or law it mirrors) and
+   compare the behaviour step by step, edge cases included. The review
+   lists each spot with what it was compared with and the result. Do not
+   sample the rest of a large diff instead of this.
+   Then the **law check against AGENTS.md** - for each, cite file:line on a finding:
    - Prime Directive: no `unwrap()/expect()/panic!` outside tests; numeric
      casts and indexing safe; degenerate input refused by name; nothing that
      could post a gouging or wrong toolpath/NC silently.
@@ -132,6 +142,7 @@ merge.
      no blockers, gets the yellow `needs-maintainer` label - see the
      review-prs skill, step 2b);
    - What looks good (short bullets);
+   - Risk spots compared (step 5): each spot, its reference, the result;
    - Local results merged with main (build, each suite with pass counts,
      clippy) - exact failure text in a code block;
    - Requested before merge (numbered, each with file:line and the fix);
