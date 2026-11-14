@@ -89,7 +89,8 @@ afterwards - the work must not bother them.
   --delta <PR> --reviewed <sha>` reports it (SAME). Hand edits confined to
   rule-settled files (`.claude/PROCESS_VERSION`, `CHANGELOG.md`,
   `RECOMMENDED.md`, `Cargo.lock`, snapshot PNGs taken from main) are read by
-  the merging session itself (MECHANICAL). Only a conflict resolved by hand
+  the merging session itself (MECHANICAL; `PROCESS_VERSION` stays on that
+  list for branches opened before #1153 that still edit it). Only a conflict resolved by hand
   gets a delta review of its remerge-diff (DELTA), and new commits get a
   review of those commits (NEW CODE).
 - **Only collaborators' reviews count** (issue #1320, 2026-11-12, decided in
@@ -173,7 +174,7 @@ go to `CHANGELOG.md`.
   - `P1`-`P3` are fix-now work and are for defects only: "wanted" is never
     a reason for them. Only `P1` and `P2` hold a release cut back
     (maintainer's choice, question dialog, 2026-11-12: "only P1 and P2
-    block a release cut"). A minor/major cut does not start while any `P1` or `P2` issue is open; a `P3` or lower never holds one. A `P3` is worked ahead of planned
+    block a release cut"). A minor/major cut does not start while any `P1` or `P2` issue is open; a `P3` or lower never holds one. The check is made once, when the cut starts (release step 1); a `P1` or `P2` filed after that does not restart the cut (#1424). A `P3` is worked ahead of planned
     work, but a cut does not wait for it.
   - `P4` is set only where the maintainer asked for the work in his own
     words; the issue quotes them.
@@ -287,15 +288,28 @@ go to `CHANGELOG.md`.
     current. What changed and why is in the pinned issue #681 ("Process
     changes"); a fork maintainer subscribes there.
 - **Process changes bump `PROCESS_VERSION` and are announced** (same
-  request). Any PR that changes a process file (the list above) also
-  increments the single integer in `.claude/PROCESS_VERSION`, and when it
-  merges, the merging session adds a comment to the pinned issue #681:
-  `PROCESS_VERSION <n>` · PR #M · what changed · what a fork must do. The
-  reviewer treats a missing bump as a requested change. Two process PRs
-  open at once both bump to the same number; whichever merges second
-  takes the next number when it merges main. At a cut, the release notes
-  get a short "Process changes" section listing the versions since the
-  previous tag.
+  request; the writer changed with #1153, 2026-11-13). A PR that changes a
+  process file (the list above) does NOT touch `.claude/PROCESS_VERSION`:
+  every open process PR bumping the same line made each merge conflict
+  the rest, and two could carry the same number (#1117 and #930 both at
+  17). Its body carries the line `Process change: yes` instead, and the
+  reviewer treats a missing line, or an edit of `PROCESS_VERSION` in the
+  PR, as a requested change. Exempt: the bump PR itself and #1488, which
+  introduced this rule and bumped 62 to 63. The one-line bump PR is
+  MECHANICAL: the merging session reads it, it needs no agent review, and
+  it merges at once. The merging session is the one writer: after
+  a merge batch that merged at least one process PR it runs `cargo xtask
+  process-bump` (one integer, +1, once per batch, however many process PRs
+  were in it) in a worktree off the new `main`, opens a one-line PR
+  `chore(process): PROCESS_VERSION <n>` and merges it, then adds a comment
+  to the pinned issue #681: `PROCESS_VERSION <n>` · PR #M (every process
+  PR of the batch) · what changed · what a fork must do. A fork still
+  compares `.claude/PROCESS_VERSION` with upstream's and pulls the process
+  files when upstream's is higher, so nothing changes for it; the number
+  moves a little after the files do, and a fork that synced in between
+  pulls the same files again at the bump, which is harmless. At a cut, the
+  release notes get a short "Process changes" section listing the
+  versions since the previous tag.
 - **Overlapping issues stack.** Open PRs wait unmerged (a `feat` until its
   cut, a fix until it is reviewed), so an
   issue touching code an open PR changes branches off that PR's branch
@@ -451,6 +465,30 @@ go to `CHANGELOG.md`.
   umbrella. When every sub-issue is filed, drop `needs-research` and close
   the umbrella with a comment naming them - it is not kept open, so Pick
   can never take it for code. Only the sub-issues are picked for code.
+- **Issues and comments are written in ASD-STE100** (maintainer, 2026-11-14:
+  "all communication thru github issues, and github comments should follow
+  the ASDSTE-100 language standard for Technical English"). Write every
+  issue title and body, and every comment on an issue or pull request, in
+  ASD-STE100 Simplified Technical English. This includes review comments and
+  PR descriptions. Agents and the maintainer's sessions follow the same rule.
+  The standard is a licensed document (https://www.asd-ste100.org). Do not
+  copy its text. In practice:
+  - Use short sentences: about 20 words in an instruction, 25 in a
+    description. Give one instruction in each sentence.
+  - Use the active voice. Use the simple present, past and future tenses.
+  - Use one word for one meaning. Use the same term for the same thing every
+    time.
+  - Do not use idioms, slang or filler words. Keep the articles (a, an, the).
+  - Use no more than three nouns in a row. Use a vertical list for a long
+    enumeration.
+  - The rule does not change: code, commands, identifiers, file paths, log
+    and error output, quoted text of other people, the technical names of the
+    trade (G-code words, CAM terms), and the fixed strings that other agents
+    parse (`claimed:`, `/claim`, `<!-- pr-reviewer: ... -->`,
+    `<!-- review-cost: ... -->`, `Fixes #N`, `Process change: yes`, and the
+    release and claim comment formats in this file).
+  - The rule applies to what we write. Never reject an outside reporter's
+    issue, and never correct its language.
 - **Report on the issue, not in prose files.** A finding, a held patch, a
   blocker or a decision taken goes into an issue comment. If the work is
   blocked, swap `claimed` for `blocked` and say on what. If a fix shows new
@@ -735,9 +773,11 @@ gate <tier>`, from the workspace's `xtask/` crate. `scripts/gate.ps1`
    every debug suite except those tagged slow, the ui suites from
    `crates/ui`, clippy (`cargo xtask gate batch`). No release-mode heavy
    lanes.
-3. **release** (only at a cut, run locally): everything - all debug
-   suites, the `--ignored` heavy lanes in release (`cargo xtask gate
-   release`).
+3. **release** (only at a cut): everything - all debug suites, the
+   `--ignored` heavy lanes in release (`cargo xtask gate release`). Since
+   #1413 it runs on the self-hosted Linux cut runner through `cut.yml`
+   (`cargo xtask gate release --no-snapshots`); the pixel-snapshot lanes
+   stay a local step at the cut ("A cut goes PR review", step 2).
 
 Any tier takes `--dry-run` to print its plan without running it; logs go
 to `gate-logs/<tier>-<timestamp>/`.
@@ -758,12 +798,96 @@ makes every worktree miss. Dev builds carry line tables only (no variable
 debug info; `--config profile.dev.debug=true` restores it for a debugger).
 
 **GitHub Actions minutes are budgeted** (3000/month; Windows bills 2x,
-macOS 10x). Nothing runs on push or PR: every gate tier runs locally
-through `cargo xtask gate`. GitHub runs only `release.yml` on a pushed tag
-(the build that publishes the artifact). `ci.yml` and `nightly.yml` are
-manual (`workflow_dispatch`) for the rare case a clean-machine run is
-wanted. Never add a `push`, `pull_request` or `schedule` trigger without
-the user's say-so.
+macOS 10x). Nothing runs on PR, and a `push` trigger is allowed only on
+`main` and only for a workflow whose jobs run on the self-hosted runner
+(`post-merge.yml`, #1451; user, 2026-11-13: "Can we setup a build test post
+merge using local gh runner?"); the quick and batch tiers otherwise run
+locally through `cargo xtask gate`. GitHub runs `release.yml` for a cut
+tag (the build that publishes the artifact), and `cut.yml` (#1413) runs
+the release tier of a cut on the self-hosted cut runner (below), which
+bills no minutes; `cut.yml` starts `release.yml`, it does not replace it.
+Billed minutes of one cut: `cut.yml` 0 (self-hosted); `release.yml` about
+230 by v0.18.0's job times (Linux jobs ~50, Windows 10 x2, macOS 16 x10) -
+**measured cut: to be filled in from the first `cut.yml` cut's release
+run (Actions -> the run -> Usage)**. `aur-package.yml` is a job
+`release.yml` calls. The manual `ci.yml` and `nightly.yml` are gone (user,
+2026-11-13: "so we can remove ci.yml and nightly.yml as a docs change."):
+they were all but unused. Triggers stay `workflow_dispatch` (plus `release.yml`'s tag push): never
+add a `push`, `pull_request` or `schedule` trigger without the user's
+say-so, and never any trigger a fork PR can fire on a workflow whose jobs
+run on the self-hosted runner (maintainer, 2026-11-13: a public repo's
+fork PR must not run code on the maintainer's machine).
+
+**The cut runner** (#1413; maintainer, 2026-11-13: "That test and cut
+runner should be linux and it can only run on self hosted agents").
+`cut.yml`'s jobs run on `runs-on: [self-hosted, linux]`, never on a
+GitHub-hosted runner. What the machine needs:
+- Linux x86-64, registered to NeoTech/Camcraft at repo level with the
+  labels `self-hosted`, `Linux`, `X64` (an extra name label is fine);
+  sized for 16 cores and ~64 GB RAM, fewer cores work, slower.
+- Disk: at least 100 GB free for the work dir (a clean `target/` with the
+  release heavy lanes is 20-30 GB) plus the sccache cache.
+- The Rust toolchain on the runner service's PATH (`~/.cargo/bin`, a
+  stable rustc that builds the workspace), `git`, `gh`, and the Linux
+  build packages `release.yml`'s linux job installs (`pkg-config`,
+  `libwayland-dev`, `libxkbcommon-dev`, `libx11-dev`). The UI suites open
+  windows: install `xvfb` (the workflow wraps the gate in `xvfb-run -a`
+  when no display is set) and Mesa's software drivers
+  (`mesa-vulkan-drivers`, `libgl1-mesa-dri`) for a GPU-less adapter.
+- sccache: `RUSTC_WRAPPER` set to the sccache binary and
+  `SCCACHE_CACHE_SIZE` (e.g. 40G) in the runner's `.env`. Never set
+  `CARGO_TARGET_DIR` ("Shared compile cache"): each run builds in the
+  workspace's own `target/`, which `actions/checkout` cleans, and the
+  compile cache makes that cheap.
+- Registration: the maintainer creates a token (Settings -> Actions ->
+  Runners -> New self-hosted runner, Linux x64), then in the runner
+  directory `./config.sh --unattended --url
+  https://github.com/NeoTech/Camcraft --token <token> --name <name>
+  --labels <extra labels> --work <work dir>`, and runs it as a service
+  (`./svc.sh install`, or a user systemd unit with linger enabled so it
+  survives logout).
+- Safety: run it as an unprivileged account (no passwordless sudo; the
+  `docker` group is root-equivalent), keep "Require approval for all
+  outside collaborators" on for fork PR workflows (Settings -> Actions ->
+  General), and never approve a fork PR's workflow run that adds or
+  changes a file under `.github/workflows/` - such a file could name
+  `self-hosted`.
+
+**The post-merge gate** (#1451) shares this runner: `post-merge.yml` runs
+`cargo xtask gate batch` on every push to `main` (and `workflow_dispatch`,
+input `ref`), never on a PR trigger. It yields to the cut - it skips itself
+(green, with a notice) while a `cut.yml` run is queued or running or an
+open `release/vX.Y.Z` PR from this repo exists (`.github/scripts/post-merge-skip.sh`) -
+and reports through `.github/scripts/post-merge-report.sh`. Only its report job
+holds `issues: write`.
+
+**The PR test runner** (#1420; maintainer, 2026-11-13: "then that is the
+decision, workflow_dispatch"). `pr-test.yml` runs a PR review's build and
+tests on the maintainer's self-hosted runners (no billed minutes)
+instead of a 10-20 GB worktree on the reviewer's machine. It has a
+`workflow_dispatch` trigger only (inputs: the PR number and the head SHA
+the reviewer read), a read-only token and no secrets; it checks out
+`refs/pull/<N>/head`, refuses any other head, refuses a diff touching
+`build.rs`, `.github/`, `scripts/`, a `.cargo/` directory at any depth, a
+`Cargo.toml`/`Cargo.lock`, a toolchain file or `xtask/` (listed with
+`--no-renames`), trial-merges with main and runs `cargo xtask gate
+quick --base origin/main` plus clippy on the touched crates (ui suites under
+`xvfb-run` with Mesa's software drivers, the cut runner's setup from issue
+1413). Only the PR-reviewer agent starts it, after reading the diff, and
+only for a collaborator's PR ("Collaborators only", maintainer, 2026-11-13;
+the workflow checks the author's push access itself and refuses otherwise,
+other PRs build locally) when a runner is online and no cut is using it; a "read, not built" PR
+is never sent. With no runner, or a run that is cancelled, times out or
+never starts, the review builds locally or says "not built" - never "pass".
+The job targets the runner label `camcraft-pr-test` and runs on any self-hosted
+runner carrying it, Linux (`uma`) or macOS (`m3`); on macOS the UI suites open
+real windows, so that runner needs a logged-in session, and per-OS pinned
+readings run that OS's arm. Each runs under its own OS
+user, HOME, cargo home and sccache dir, never shared with the cut/release
+runner of issue 1413 ("Separate runner/user", same date). The refusal list
+does not stop hostile test code: that is why only collaborators' PRs run.
+Windows-only readings (`cfg(windows)`, per-OS pinned values) still run
+locally for the touched suites.
 
 **Test the change, not everything.** A fix is proved by the test(s) that pin
 it, run one by one: `cargo xtask gate test <name> [--crate c] [--binary b]
@@ -897,7 +1021,19 @@ calendar. `release.yml` builds and publishes on `vX.Y.0` tags only (~30-40
 billed Actions minutes each); PRs run no Actions (no `pull_request`
 trigger), so the PR flow costs no minutes.
 
-**Fixes are tested in the background.** After a fix merges (or, one gate
+**Fixes are tested in the background - by `post-merge.yml` first** (#1451).
+Every push to `main` runs the batch tier on the self-hosted runner without
+anyone dispatching it: a burst of merges tests only the newest head
+(`cancel-in-progress`), a run skips itself while a `cut.yml` run or a
+release PR is open (the cut's release gate covers main then), and one rolling
+issue `main is red (post-merge gate)` is opened or commented on when it fails
+(`P2`, "a gate on main is red"; `P1` only when a failing suite is a
+wrong-output suite - a golden CL/NC or recorded-post-stream suite, named in
+the script's anchored `OUTPUT_SUITES` list) and closed by the next green
+run; only a `source:agent` issue is ever closed by it. A red result is that issue; the main session does not dispatch a gate for
+a merge the workflow covers. **Fallback when the runner is down** (the run
+is queued with no runner, or it was skipped for a cut and the cut was
+abandoned): the old local procedure below. After a fix merges (or, one gate
 per batch since 2026-11-12, after a merge batch of "Refresh only at merge
 time" as a whole, not after each merge), the main
 session dispatches a gate-runner subagent to run the batch tier on
@@ -914,7 +1050,7 @@ only when no gate or cut is running and it is past ~60 GB. A red result is a new
 gouge, else `P2`, `source:agent`) naming the failing tests and the merge
 that broke them. A red result does not revert the merge by itself; the
 issue is worked in the normal order, and a minor/major cut does not start
-while any `P1` or `P2` issue is open (a `P3` or lower never holds one). The full release tier runs only at a
+while any `P1` or `P2` issue is open (checked once, at the start of the cut; a `P3` or lower never holds one). The full release tier runs only at a
 minor/major cut. A fix-only stretch produces no build; to hand-test one, run
 `cargo xtask release --version <next> --no-tag --skip-gate` (or the wrapper
 `scripts/release.ps1 -Version <next> -NoTag -SkipGate`) locally on a scratch
@@ -940,6 +1076,19 @@ a tag"):
    fails otherwise). From step 1 to the tag, nothing else merges to main. Stacked PRs: retarget each child to `main`
    before merging its parent (Issue Law, "Overlapping issues stack"), then
    merge parent-first.
+   **Start condition** (maintainer, 2026-11-13, in chat, after the v0.19.0
+   cut: "We should as a rule not let P1/P2s coming in after cut - force a
+   restart as its a ~2 hour job"; #1424): before this step, the session
+   checks that no `P1` or `P2` issue is open and records the UTC start time
+   and that list (none) in the release PR body. A `P1` or `P2` issue filed
+   after that moment does not restart the cut and does not enter it: the cut
+   finishes on the tree that passed the release gate, the issue is named
+   under "Known issues" (step 2 and the release PR comment, step 3), and its
+   fix merges after the tag and ships in the next minor. Only the maintainer
+   can stop a cut for it; no agent stops or restarts a cut for a late issue.
+   An agent that finds a late `P1` (unsafe or wrong output) tells the
+   maintainer in one line and goes on. Failures of the cut's own release gate
+   are not late issues: they are fixed in the cut as before.
 2. **Release branch.** Sync main (`git pull --ff-only`), then
    `git switch -c release/vX.Y.Z`. The version is the highest bump among
    the commits since the last tag (table above). Run
@@ -948,28 +1097,60 @@ a tag"):
    removes them; it goes in the same docs commit). Write `RELEASE_NOTES.md`
    and the `CHANGELOG.md` rows for every PR merged since that tag (one per
    behaviour PR, from its `Changelog:` line, plus any `Unreleased` rows).
+   Any `P1` or `P2` filed after the start (step 1) goes under a "Known
+   issues" section of the release notes, by number and title.
    The release notes also get a short "Process changes" section listing
    each `PROCESS_VERSION` since the previous tag (taken from the pinned
    issue #681). Commit all of it as `docs: X.Y.Z release notes;
    changelog`; then `cargo xtask release --version X.Y.Z --no-tag
-   --installer` (Windows; `scripts/release.ps1 -Version X.Y.Z -NoTag
-   -Installer` is the same command through its wrapper; on macOS and Linux
-   it hands packaging to `scripts/package-*.sh` and refuses `--installer`)
-   - it runs the release gate tier on that tree (pass `--skip-gate` only if
-   this exact tree already passed it), commits the version bump, builds
-   the zip and installer, and makes no tag (it refuses `--no-tag` on main).
-3. **Release PR.** `git push -u origin release/vX.Y.Z`,
-   `gh pr create --base main --title "chore(release): X.Y.Z"`, reviewed like
-   any PR. Record the branch tip first (`tip=$(git rev-parse
-   release/vX.Y.Z)` - `--delete-branch` removes the name), then
-   `gh pr merge --merge --delete-branch`.
-4. **Tag the release merge commit.** Sync main; `m=$(git rev-parse main)`
-   is the release PR's merge commit (nothing else merged since step 1).
-   `git diff $tip $m` must be empty - the zip's tree is the tagged tree. Then
-   `git tag -a vX.Y.Z -m "CamCraft X.Y.Z" $m` and `git push origin vX.Y.Z`.
-   If the diff is not empty, do not tag: something reached main mid-cut;
-   start the cut again from step 2 on a fresh release branch. Comment
-   `shipped in vX.Y.Z` on every issue the cut closed.
+   --skip-gate` commits the version bump (the release gate runs on the cut
+   runner, step 3) and makes no tag (it refuses `--no-tag` on main). Its
+   local zip (and, on Windows with `--installer`, installer) is a
+   hand-test build only - the published zip, installer and packages are
+   built by `release.yml` from the tag - and a packaging failure after its
+   phase 4 does not undo the bump commit. Two checks stay local, on
+   Windows, before the push: the pixel-snapshot lanes (`cargo test -p
+   camcraft-ui --lib -- --ignored snapshot` and `cargo test -p camcraft-ui
+   --test gpu_render -- --ignored snapshot`, CWD `crates/ui`; the goldens
+   were made on Windows and are regenerated here after a look at the
+   `.diff.png`), and, optionally, the Windows arms of per-OS pinned
+   readings (issue 1402's move counts in `crates/app/tests/pocket3d_hsm.rs`
+   and the like: the Linux runner checks only the Linux arm, and a Windows
+   arm nobody runs drifts until the next Windows check). A cut without a
+   Windows machine skips both and says so in the release PR.
+3. **Release gate on the cut runner, then the release PR.** `git push -u
+   origin release/vX.Y.Z`, then start the gate: Actions -> Cut -> Run
+   workflow, `version` X.Y.Z, `stage` gate (`gh workflow run cut.yml -f
+   version=X.Y.Z -f stage=gate`). It checks out `release/vX.Y.Z`, refuses
+   a branch whose `Cargo.toml` or `RELEASE_NOTES.md` does not name X.Y.Z
+   or whose tag exists, runs `cargo xtask gate release --no-snapshots`,
+   uploads `gate-logs/` as an artifact either way, and, green, records the
+   tested commit. Red: nothing is tagged; fix on the release branch, push,
+   and start the gate again. The `dry_run` input prints the plan only (try
+   a new runner with it). While the gate runs, `gh pr create --base main
+   --title "chore(release): X.Y.Z"`, reviewed like any PR; once the gate is
+   green and the PR reviewed, `gh pr merge --merge --delete-branch`. The
+   release PR body carries the start-condition record (step 1); a comment
+   on it names each `P1`/`P2` filed after the start, as "Known issues". No
+   push to the branch after the green gate: the tag stage refuses a merge
+   whose tree is not the gated tree.
+4. **Tag the release merge commit - on the cut runner.** Start Cut again
+   with `stage` tag (`gh workflow run cut.yml -f version=X.Y.Z -f
+   stage=tag`). It takes `tip`, the commit of the newest green gate run
+   for X.Y.Z, and `m`, main's head; it refuses unless `m` is the release
+   PR's merge of `tip` (`m^2 == tip`: nothing else merged since step 1),
+   `git diff $tip $m` is empty (the gated tree is the tagged tree) and the
+   tag is free. Then it makes `git tag -a vX.Y.Z -m "CamCraft X.Y.Z" $m`,
+   pushes it, and starts the existing `release.yml` on the tag (`gh
+   workflow run release.yml --ref vX.Y.Z`: a tag pushed with the workflow
+   token starts no workflow by itself, and on a tag ref `release.yml`
+   publishes exactly as on a pushed tag). `dry_run` runs every check and
+   tags nothing. A refusal means something reached main mid-cut or the
+   branch moved after the gate: start the cut again from step 2 on a fresh
+   release branch. The local cut (gate locally, then `git tag` and `git
+   push origin vX.Y.Z` by hand, which fires `release.yml` on the push)
+   stays the fallback when the runner is down, with the same empty-diff
+   rule. Comment `shipped in vX.Y.Z` on every issue the cut closed.
 5. **Check the documentation site** (#688). The same tag run regenerates
    the Zola site in `site/` from the tagged tree and deploys it to GitHub
    Pages (`release.yml` jobs `site` and `pages`; `pages` waits for
@@ -998,8 +1179,10 @@ use of the /review-prs into agents.md"). A pull request from a fork gets a
 review by the `PR-reviewer` agent (`.claude/agents/PR-reviewer.md`),
 dispatched by the project skill `/review-prs` (`.claude/skills/review-prs/`) -
 run on demand (`/review-prs`, or `/review-prs <N>` for one PR) and on a loop
-(`/loop 10m /review-prs`, every 10 minutes). The agent trial-merges the PR with current main in
-its own worktree, builds, runs the suites it touches and clippy, checks this
+(`/loop 10m /review-prs`, every 10 minutes). The agent trial-merges the PR with current main
+and builds it, runs the suites it touches and clippy - on the self-hosted
+runner through `pr-test.yml` when one is online ("The PR test runner"), else
+in its own worktree - checks this
 file's laws, and posts a plain review **comment** whose first line is
 `<!-- pr-reviewer: <head sha> -->` (counted only when its author is a collaborator, see "Only collaborators' reviews count"; the marker that stops a second review of
 the same push), and sets the review label (below). It never approves, requests changes, merges or pushes:
@@ -1034,9 +1217,10 @@ retargeting any stacked child to `main` first),
 never while a cut is between step 1 and its tag.
 
 **Every cut tag is published.** A release cut is not done until its tag is
-on GitHub: the tag is made on `main` after the release PR merges (step 4)
-and pushed at once - `git push origin vX.Y.0` - which fires `release.yml`
-and attaches the built artifact to a GitHub release. A tag that exists only
+on GitHub: the tag is made on `main` after the release PR merges (step 4),
+by `cut.yml`'s tag stage, which pushes it and starts `release.yml` on it
+(by hand, `git push origin vX.Y.0` fires `release.yml` itself), and
+`release.yml` attaches the built artifact to a GitHub release. A tag that exists only
 locally is an unfinished cut. Never move or re-push an existing tag; a fix
 after a cut merges to `main` and ships in the next minor. Never force-push -
 not `main`, not a branch with an open PR.

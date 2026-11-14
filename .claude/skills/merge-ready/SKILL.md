@@ -148,9 +148,9 @@ Read the plan before asking:
 - A stacked child whose base is not `main` is retargeted
   (`gh pr edit B --base main`) before its parent merges with
   `--delete-branch`; otherwise GitHub closes it.
-- Process PRs each bump `.claude/PROCESS_VERSION` and so conflict with each
-  other on that one line. That is `mechanical`: the later one takes the next
-  number in its refresh.
+- Process PRs no longer touch `.claude/PROCESS_VERSION` (#1153), so they do
+  not conflict with each other on it. A PR that still edits that file is
+  sent back: the merging session is its one writer (see "After all merges").
 
 Show the plan in two lines before asking ("Wave 1 (no refresh needed): #A, #B,
 #C. Wave 2 (one refresh each, in this order): #D - conflicts with #B in x.rs;
@@ -225,9 +225,12 @@ Do not re-review, re-gate or refresh anything between wave-1 merges.
 - For each merged PR, read the issues it closed (`closingIssuesReferences`)
   and remove `in-review` and `claimed` from those issues.
 - **Process files:** if a merged PR changed process files (`AGENTS.md`,
-  `.claude/agents/`, `.claude/skills/`, `scripts/gate.*`, `xtask/`), post the
-  `PROCESS_VERSION <n>` · PR #M · what changed · what a fork must do comment
-  on the pinned issue #681, as AGENTS.md says.
+  `.claude/agents/`, `.claude/skills/`, `scripts/gate.*`, `xtask/`), once
+  for the whole batch: run `cargo xtask process-bump` in a worktree off the
+  new `main`, open and merge the one-line PR `chore(process): PROCESS_VERSION
+  <n>`, then post the `PROCESS_VERSION <n>` · PR #M (each process PR of the
+  batch) · what changed · what a fork must do comment on the pinned issue
+  #681, as AGENTS.md says. Never bump the file inside a PR (#1153).
 - **Don't refresh the rest.** Open PRs this batch turned `CONFLICTING` and
   that are not about to merge are left alone (label `conflicts` if they were
   `merge-ready`). They are refreshed when their turn to merge comes.

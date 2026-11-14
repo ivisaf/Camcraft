@@ -162,11 +162,23 @@ pub fn batch(root: &Path) -> Plan {
 }
 
 pub fn release(root: &Path) -> Plan {
+    release_with(root, true)
+}
+
+/// The release plan; `snapshots: false` (`gate release --no-snapshots`, #1413) leaves out the two ui
+/// pixel-snapshot lanes, whose goldens are made on Windows: the cut workflow's Linux runner runs every
+/// other lane, and the snapshot lanes stay a local step at the cut.
+pub fn release_with(root: &Path, snapshots: bool) -> Plan {
     let mut plan = Plan::default();
     plan.notes.push(
         "release: every debug suite, ui, clippy, then the --ignored heavy lanes in release and the ui snapshot lane"
             .into(),
     );
+    if !snapshots {
+        plan.notes.push(
+            "--no-snapshots: the ui pixel-snapshot lanes are skipped (Windows-made goldens); run them locally at the cut".into(),
+        );
+    }
     let non_ui: Vec<&str> = ALL_CRATES.iter().copied().filter(|d| *d != "ui").collect();
     plan.steps.extend(run_suites(root, &non_ui, false));
     plan.steps.extend(run_suites(root, &["ui"], false));
@@ -178,6 +190,9 @@ pub fn release(root: &Path) -> Plan {
             &["test", "--release", "-j", J, "-p", &p, "--no-fail-fast", "--", T, "--ignored"],
             "",
         ));
+    }
+    if !snapshots {
+        return plan;
     }
     // The ui pixel snapshot goldens (#255): #[ignore]d out of quick/batch, run here only, debug like the
     // goldens were made, CWD crates/ui so they resolve tests/snapshots/. Regenerated at the cut with
