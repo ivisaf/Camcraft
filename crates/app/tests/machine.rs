@@ -11,7 +11,7 @@
 //! Program tests build `Machine` structs directly; only the reader
 //! tests feed it text.
 //!
-//! Gate map (M4.4): covers app::commands, app::geometry, app::machine, app::model, app::operation, app::post, app::posting, app::schema, app::stock, app::tools, app::world.
+//! Gate map (M4.4): covers app::commands, app::geometry, app::machine, post::machine, app::model, app::operation, post::post, app::posting, app::schema, geometry::geometry::stock, tools::tools, app::world.
 
 use flecs_ecs::prelude::World;
 
@@ -743,6 +743,8 @@ fn every_shipped_machine_mounts_and_speaks_its_declaration() {
         ("Tormach PCNC 1100 (Series 3)", Kind::Mill),
         ("Tormach 770M+", Kind::Mill),
         ("Tormach 1100M+", Kind::Mill),
+        ("grblHAL 3-axis", Kind::Mill),
+        ("TinyG 3-axis", Kind::Mill),
         ("Tormach 24R", Kind::Mill),
         ("Tormach xsTECH Pro", Kind::Mill),
         ("Tormach xsTECH", Kind::Mill),
@@ -752,6 +754,9 @@ fn every_shipped_machine_mounts_and_speaks_its_declaration() {
         ("Tormach 15LX Slant-PRO", Kind::Lathe),
         ("Makera Carvera", Kind::Mill),
         ("Makera Carvera Air", Kind::Mill),
+        ("Sienci AltMill 2x4", Kind::Mill),
+        ("Sienci AltMill 4x4", Kind::Mill),
+        ("Sienci AltMill 4x8", Kind::Mill),
         ("Doosan DNM 5700", Kind::Mill),
     ];
     assert_eq!(MACHINES.len(), expectations.len(), "the pane offers what the tests pin");

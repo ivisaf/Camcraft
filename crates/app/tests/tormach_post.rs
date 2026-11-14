@@ -5,10 +5,13 @@
 //! units reaching the script as `machine.units`.
 //! Provenance: our own tests over our own post and machine file.
 //!
-//! Gate map (M4.4): covers app::post (tormach.cps), post::machine (units),
+//! Gate map (M4.4): covers post::post (tormach.cps), post::machine (units),
 //! app::posting (registry).
 
+mod common;
+
 use camcraft_app::machine::parse_mch;
+use common::legacy_program::as_program;
 use camcraft_app::post::{engine, machine};
 use std::path::{Path, PathBuf};
 
@@ -42,15 +45,25 @@ fn machine_for(mch: &str) -> serde_json::Value {
 
 fn post(mch: &str, golden: &str) -> String {
     let cps = read("assets/posts/tormach.cps");
-    let stream = read(&format!("crates/app/tests/golden/{golden}.cl"));
+    // #1357: posted as a real program (tool, spindle, cycle feeds) - the
+    // bare stream is refused by name.
+    let stream = as_program(golden, &read(&format!("crates/app/tests/golden/{golden}.cl")));
     let out =
-        engine::run(&cps, &machine_for(mch), &stream).unwrap_or_else(|e| panic!("{golden}: {e}"));
+        run_doc(&cps, mch, &stream).unwrap_or_else(|e| panic!("{golden}: {e}"));
     assert!(
         out.warnings.is_empty(),
         "{golden} on {mch}: {:?}",
         out.warnings
     );
     out.program
+}
+
+/// #902: the program's unit is the document's. The Tormach file's runs
+/// stand for an inch document (what an inch machine file posted before
+/// #902); the metric reference file's for an mm one.
+fn run_doc(cps: &str, mch: &str, stream: &str) -> Result<engine::PostOutput, camcraft_app::post::PostError> {
+    let units = if mch == TORMACH_MCH { serde_json::json!({ "Units": "inch" }) } else { serde_json::Value::Null };
+    engine::run_with(cps, &machine_for(mch), stream, &units)
 }
 
 /// The letter and number of a word like `X-1.25`, if it is one.
@@ -153,7 +166,10 @@ fn an_inch_machine_posts_every_length_and_feed_in_inches() {
             mm.contains("G21 G17 G90 G91.1 G94"),
             "{golden}: metric header"
         );
-        let (a, b): (Vec<&str>, Vec<&str>) = (inch.lines().collect(), mm.lines().collect());
+        // The belt-range note is the 770MX's own (its two ranges); the
+        // metric reference machine states none.
+        let (a, b): (Vec<&str>, Vec<&str>) =
+            (inch.lines().filter(|l| !l.contains("BELT RANGE")).collect(), mm.lines().collect());
         assert_eq!(
             a.len(),
             b.len(),
@@ -206,7 +222,8 @@ fn a_dwell_posts_in_seconds() {
     let stream = read("crates/app/tests/golden/drill_peck.cl")
         .replace("; CYCLE Peck", "; CYCLE Spot")
         .replace("DWELL0", "DWELL500");
-    let out = engine::run(&cps, &machine_for(TORMACH_MCH), &stream).expect("posts");
+    let stream = as_program("drill_peck", &stream);
+    let out = run_doc(&cps, TORMACH_MCH, &stream).expect("posts");
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
     let g82 = out
         .program
@@ -284,7 +301,8 @@ fn a_tap_posts_g84_with_its_feed_and_no_dwell_word() {
     // A tap marker carrying its synthesized feed: 1270 mm/min = 50 in/min.
     let stream =
         read("crates/app/tests/golden/tap_plate.cl").replace("DWELL0 AT1", "DWELL500 F1270000 AT1");
-    let out = engine::run(&cps, &machine_for(TORMACH_MCH), &stream).expect("posts");
+    let stream = as_program("tap_plate", &stream);
+    let out = run_doc(&cps, TORMACH_MCH, &stream).expect("posts");
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
     let g84 = out
         .program
@@ -309,7 +327,7 @@ fn every_tool_change_lifts_z_before_g30() {
     let cps = read("assets/posts/tormach.cps");
     let stream = "PARAM SpindleSpeed 2000\nTOOL 1 T1\nSECTION\nRapid X 0 Y 0 Z 5000\nFeed X 1000 Y 0 Z -1000 F 500000\nENDSECTION\n\
                   PARAM SpindleSpeed 2000\nTOOL 2 T2\nSECTION\nRapid X 0 Y 0 Z 5000\nFeed X 1000 Y 0 Z -1000 F 500000\nENDSECTION\n";
-    let out = engine::run(&cps, &machine_for(TORMACH_MCH), stream).expect("posts");
+    let out = run_doc(&cps, TORMACH_MCH, stream).expect("posts");
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
     let lines: Vec<&str> = out.program.lines().collect();
     let changes: Vec<usize> = (0..lines.len())
@@ -337,7 +355,7 @@ fn the_first_move_after_a_tool_change_positions_xy_with_z_up() {
     let cps = read("assets/posts/tormach.cps");
     let stream = "PARAM SpindleSpeed 2000\nTOOL 1 T1\nSECTION\nRapid X 25400 Y 12700 Z 5080\nFeed X 25400 Y 12700 Z -2540 F 254000\nENDSECTION\n\
                   PARAM SpindleSpeed 2000\nTOOL 2 T2\nSECTION\nFeed X 50800 Y 0 Z -2540 F 254000\nENDSECTION\n";
-    let out = engine::run(&cps, &machine_for(TORMACH_MCH), stream).expect("posts");
+    let out = run_doc(&cps, TORMACH_MCH, stream).expect("posts");
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
     let lines: Vec<&str> = out.program.lines().collect();
     let is_motion = |l: &&str| {
@@ -400,6 +418,11 @@ fn a_face_job_on_the_built_in_770mx_passes_the_gate_and_posts_inch() {
     h.execute(
         &world,
         LoadMachine::builtin(&world, "Tormach 770MX").expect("built-in machine"),
+    );
+    // #902: an inch program is an inch document's.
+    h.execute(
+        &world,
+        camcraft_app::commands::SetUnits::new(&world, camcraft_app::units::Unit::Inches).expect("inch document"),
     );
     h.execute(
         &world,

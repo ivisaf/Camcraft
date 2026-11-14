@@ -82,20 +82,28 @@ mod face_origin;
 mod spindle_row;
 mod stock_size;
 mod stock_fit_sides;
+mod raw_stock_row;
 mod layout;
 mod machines_pane;
 mod machines_edit;
+mod machine_wire_edm;
 mod unsaved;
 mod post_refusal;
+mod program_units;
 mod gcode_viewer;
 mod first_setup;
 mod structural;
+// #661: every operation kind wears its own SVG-mastered glyph.
+mod op_icon_table;
+mod tool_icon_wiring;
 // #330: a clicked tilted face is turned flat onto the plane.
 mod plane_face_lay;
 // #554: the plane row's click takes the face, an axis row's the edge.
 mod plane_face_pick;
 // #692: one pick rule on the op page, the setup page and a smooth wall.
 mod one_pick_rule;
+// #692: the user-facing pick-through toggle (off by default) reaches the far side.
+mod pick_through;
 // #664: a left Setups page disarms its picks.
 mod setup_picks_disarm;
 // #555: real clicks pick the three points of the plane.
@@ -106,24 +114,43 @@ mod setup_tree;
 mod mcp_live;
 // #389: per-setup post options and the tool-list export.
 mod setup_post_options;
+// #821: the raised-rotary rows of a setup's Machine page.
+mod setup_rotary;
 // #155: Pause / Home entries in the operation list.
 mod program_entry;
 // #371: the tool editor's Body section.
 mod tool_body;
+mod tool_body_lathe;
 // #93: the tool editor's spun-profile (Profile) section.
 mod tool_profile;
 // #793: the tool editor's holder library picker.
 mod tool_holder;
+// #889: the Tool library page's "Import tool holders" toggle.
+mod tool_library_import;
 // #93 slice 2: the Profile tab's drawn cutter.
 mod tool_cutter;
+// #93 slice 3: the drawn cutter edited by its parameters.
+mod tool_cutter_params;
 // #441: the Theme ribbon door; the Stock page shows stock only.
 mod theme_door;
 mod recent_door;
+// #645: the browser's "Show origin names" switch and the per-user view file.
+mod view_names;
 mod prefs_door;
 // #509: the Fixtures page rows fit the pane.
 mod fixture_rows;
+// #864: a reduced-fidelity model says so on its page.
+mod model_fidelity;
+// #1054: the STEP facet budget on the model page.
+mod step_budget;
 // #709 hand check: both points of a two-point axis stay marked.
 mod two_point_marks;
+// #979: the viewport box select.
+mod box_select;
+// #1104: the Setups page lists setups only.
+mod setups_declutter;
+// #1206: each setup's own Machine and Post pages pick its own mount.
+mod setup_mount_pages;
 
 /// What the per-frame state of `Shell` is, minus the GPU half: the fields
 /// `shell_layout` touches, so the harness exercises the window's real body.
@@ -1342,7 +1369,8 @@ fn every_registry_kind_gets_its_tab_bar() {
                 k.label,
             );
             if has {
-                assert!(harness.query_by_label("Tool").is_some(), "{}: the pane opens on the tool row", k.label);
+                // #535: a kind that mounts no library tool has no Tool row.
+                assert_eq!(harness.query_by_label("Tool").is_some(), k.mounts_tool(), "{}: the pane opens on the tool row (only of a tool-mounting kind)", k.label);
                 per_tab.push((si, pane_texts(&harness)));
             }
         }
@@ -2563,8 +2591,8 @@ fn the_machine_door_switches_workspaces_and_rides_undo() {
         .find(|c| c.cmd == Cmd::Machine)
         .expect("the machine door stands on the bar")
         .rect;
-    let rows = panes::machine_rows(button, theme::current().row_height);
-    assert_eq!(rows.len(), 3, "Milling, Turning, Mill-turning");
+    let rows = panes::machine_rows(button, theme::current().row_height, 200.0);
+    assert_eq!(rows.len(), 4, "Milling, Turning, Mill-turning, Plasma cutting");
     // Open the door.
     let at = button.center();
     set_pos(&mut harness, at);
@@ -2650,23 +2678,33 @@ fn tips_match_the_imgui_table() {
     let empty = State::new();
     use camcraft_app::operation::Section;
     let pin = "\tRight-click to pin/unpin";
+    // The command keys are the platform's: Cmd on macOS, Ctrl elsewhere.
+    use crate::shortcut_keys::chord;
+    let new_doc = format!("New document\t{}", chord("N"));
+    let model_open = format!("Open a mesh model\t{}", chord("O"));
+    let project_open = format!("Open a project\t{}", chord("Shift+O"));
+    let save = format!("Save the project\t{}", chord("S"));
+    let save_as = format!("Save the project under a new name\t{}", chord("Shift+S"));
+    let post = format!("Post NC program (validation gate), then review it\t{}", chord("P"));
+    let undo = format!("Undo\t{}", chord("Z"));
+    let redo = format!("Redo\t{}", chord("Y"));
     let rows: &[(Cmd, &str)] = &[
-        (Cmd::New, "New document\tCtrl+N"),
-        (Cmd::Model, "Open a mesh model\tCtrl+O"),
-        (Cmd::Project, "Open a project\tCtrl+Shift+O"),
-        (Cmd::Save, "Save the project\tCtrl+S"),
-        (Cmd::SaveAs, "Save the project under a new name\tCtrl+Shift+S"),
-        (Cmd::Post, "Post NC program (validation gate), then review it\tCtrl+P"),
+        (Cmd::New, new_doc.as_str()),
+        (Cmd::Model, model_open.as_str()),
+        (Cmd::Project, project_open.as_str()),
+        (Cmd::Save, save.as_str()),
+        (Cmd::SaveAs, save_as.as_str()),
+        (Cmd::Post, post.as_str()),
         (Cmd::Setups, "Setups: create, activate and delete the document's setups"),
         (Cmd::Stock, "Stock definition"),
         (Cmd::Origin, "Work offset (WCS)"),
         (Cmd::Tools, "Tool library"),
         (
             Cmd::Machine,
-            "Switch the workspace: Milling, Turning or Mill-turning (mounts the kind's built-in machine, undoable)",
+            "Switch the workspace: Milling, Turning, Mill-turning or Plasma cutting (mounts the kind's built-in machine, undoable)",
         ),
-        (Cmd::Undo, "Undo\tCtrl+Z"),
-        (Cmd::Redo, "Redo\tCtrl+Y"),
+        (Cmd::Undo, undo.as_str()),
+        (Cmd::Redo, redo.as_str()),
         (Cmd::Run, "Generate the selected operation"),
         (Cmd::Delete, "Delete the selection\tDel"),
         (Cmd::Frame, "Frame all\tF"),
@@ -2696,11 +2734,21 @@ fn tips_match_the_imgui_table() {
         );
         let is_plasma = camcraft_app::operation::KindInfo::ALL[i].family()
             == camcraft_app::operation::Family::Plasma;
+        let is_wire = camcraft_app::operation::KindInfo::ALL[i].family()
+            == camcraft_app::operation::Family::WireEdm;
+        let is_sinker = camcraft_app::operation::KindInfo::ALL[i].family()
+            == camcraft_app::operation::Family::Sinker;
         let want = if is_turn {
             "The document's machine is a mill - turning operations do not drive it; mount a lathe or a mill-turn (Setup > Machine)".to_owned()
+        } else if is_wire {
+            // #532: nor has the wire's work a mill-turn to fall back on.
+            "The document's machine is a mill - wire EDM operations do not drive it; mount a wire EDM (Setup > Machine)".to_owned()
         } else if is_plasma {
             // #670: the torch's work has no mill-turn to fall back on.
             "The document's machine is a mill - plasma cutting operations do not drive it; mount a plasma table (Setup > Machine)".to_owned()
+        } else if is_sinker {
+            // #541: nor the electrode's.
+            "The document's machine is a mill - sinker EDM operations do not drive it; mount a sinker EDM (Setup > Machine)".to_owned()
         } else if let Some(reason) = tool_law {
             // M10.1 B: the demo's one flat end mill cannot cut every
             // mill kind - those cells say which tool kind is missing.
@@ -2725,6 +2773,11 @@ fn tips_match_the_imgui_table() {
     }
     // Every Create button shares the swap while the tool list is empty.
     for i in 0..panes::TYPES.len() {
+        // #535: a kind that mounts no library tool (the wire EDM's) is not
+        // held by an empty rack.
+        if camcraft_app::operation::KindInfo::ALL.get(i).is_some_and(|k| !k.mounts_tool()) {
+            continue;
+        }
         assert_eq!(
             panes::tip_of(Cmd::Create(i), &empty),
             "No tool yet - add one (Setup > Tools)",
@@ -4491,7 +4544,7 @@ fn stock_eye_hides_the_viewport_stock_without_removing_it_from_the_document() {
     let stock_name = camcraft_app::setup::stock_entity_name(&harness.state().state.world, None);
     let (_, leaves) = panes::browser_rows(&harness.state().state);
     let row = leaves.iter().position(|leaf| matches!(leaf, panes::Leaf::Stock(_))).expect("stock row");
-    let eye = egui::pos2(216.0, 200.0 + (row as f32 + 0.5) * theme::current().row_height);
+    let eye = egui::pos2(216.0, 221.0 + (row as f32 + 0.5) * theme::current().row_height);
     assert!(world::collect(&harness.state().state).parts.iter().any(|part| part.stock));
 
     set_pos(&mut harness, eye);
@@ -4689,8 +4742,8 @@ fn dragging_an_operation_row_reorders_within_global_setup() {
     // 1280x720 shell. The row indices come from the current flat browser,
     // so the drag follows the rows after setup nesting was removed.
     let row_h = theme::current().row_height;
-    let from = egui::pos2(120.0, 200.0 + (second as f32 + 0.5) * row_h);
-    let to = egui::pos2(120.0, 200.0 + (first as f32 + 0.25) * row_h);
+    let from = egui::pos2(120.0, 221.0 + (second as f32 + 0.5) * row_h);
+    let to = egui::pos2(120.0, 221.0 + (first as f32 + 0.25) * row_h);
     set_pos(&mut harness, from);
     button_at(&mut harness, egui::PointerButton::Primary, from, true);
     set_pos(&mut harness, to);
@@ -4832,14 +4885,14 @@ fn operations_heading_menu_pastes_the_copied_operation() {
         panes::Leaf::SetupOps(_)))
         .expect("Operations heading");
     let row_height = theme::current().row_height;
-    let heading = egui::pos2(90.0, 200.0 + (row as f32 + 0.5) * row_height);
+    let heading = egui::pos2(90.0, 221.0 + (row as f32 + 0.5) * row_height);
     set_pos(&mut harness, heading);
     button_at(&mut harness, egui::PointerButton::Secondary, heading, true);
     button_at(&mut harness, egui::PointerButton::Secondary, heading, false);
     assert_eq!(harness.state().state.tree_menu, Some(TreeMenuTarget::Operations));
 
     let paste = egui::pos2(90.0,
-        200.0 + (row as f32 + 1.0) * row_height + panes::DROP_GAP + 1.5 * row_height);
+        221.0 + (row as f32 + 1.0) * row_height + panes::DROP_GAP + 1.5 * row_height);
     set_pos(&mut harness, paste);
     button_at(&mut harness, egui::PointerButton::Primary, paste, true);
     button_at(&mut harness, egui::PointerButton::Primary, paste, false);
@@ -4856,7 +4909,7 @@ fn operation_type_menu_requires_confirmation() {
         panes::Leaf::Op(name) if name == "Contour1"))
         .expect("operation row");
     let row_height = theme::current().row_height;
-    let operation = egui::pos2(90.0, 200.0 + (row as f32 + 0.5) * row_height);
+    let operation = egui::pos2(90.0, 221.0 + (row as f32 + 0.5) * row_height);
     set_pos(&mut harness, operation);
     button_at(&mut harness, egui::PointerButton::Secondary, operation, true);
     button_at(&mut harness, egui::PointerButton::Secondary, operation, false);
@@ -4866,7 +4919,7 @@ fn operation_type_menu_requires_confirmation() {
     // Operation, Rename, Copy, Paste, Clear, Delete, Suppress, After
     // (#110), add pause / home / optional stop (#155), section header, Face.
     let face = egui::pos2(90.0,
-        200.0 + (row as f32 + 1.0) * row_height + panes::DROP_GAP + 12.5 * row_height);
+        221.0 + (row as f32 + 1.0) * row_height + panes::DROP_GAP + 12.5 * row_height);
     set_pos(&mut harness, face);
     button_at(&mut harness, egui::PointerButton::Primary, face, true);
     button_at(&mut harness, egui::PointerButton::Primary, face, false);
@@ -4895,14 +4948,14 @@ fn operation_menu_suppresses_and_sets_the_after_action() {
         panes::Leaf::Op(name) if name == "Contour1"))
         .expect("operation row");
     let row_height = theme::current().row_height;
-    let operation = egui::pos2(90.0, 200.0 + (row as f32 + 0.5) * row_height);
+    let operation = egui::pos2(90.0, 221.0 + (row as f32 + 0.5) * row_height);
     let open_menu = |harness: &mut Harness<'static, ShellUi>| {
         set_pos(harness, operation);
         button_at(harness, egui::PointerButton::Secondary, operation, true);
         button_at(harness, egui::PointerButton::Secondary, operation, false);
     };
     let click_row = |harness: &mut Harness<'static, ShellUi>, k: f32| {
-        let at = egui::pos2(90.0, 200.0 + (row as f32 + 1.0) * row_height + panes::DROP_GAP + k * row_height);
+        let at = egui::pos2(90.0, 221.0 + (row as f32 + 1.0) * row_height + panes::DROP_GAP + k * row_height);
         set_pos(harness, at);
         button_at(harness, egui::PointerButton::Primary, at, true);
         button_at(harness, egui::PointerButton::Primary, at, false);

@@ -12,7 +12,7 @@
 //! `WRITE_GOLDEN=1 cargo test -p camcraft-app --test lathe_post_g76`
 //!
 //! Gate map (M4.4): covers app::posting (post options, stream_records,
-//! post_script), app::post (cnc THREAD record, engine run_with, the
+//! post_script), post::post (cnc THREAD record, engine run_with, the
 //! lathe dialect's G76), app::commands (SetPostOptions undo),
 //! app::project (thread record + post options round trip).
 //! Lane shape (M4.4): all tests here run in seconds.
@@ -121,6 +121,7 @@ fn thread_world_hand(hand: ThreadHand) -> (World, History) {
         infeed: 0.4,
         feed: 120.0,
         plunge_feed: 40.0,
+        infeed_plan: Default::default(),
         hand,
     };
     let cmd = CreateOperation::new(&world, "TH1", "TD-1732-60", SrcRef::Entity("bar".into()), params);

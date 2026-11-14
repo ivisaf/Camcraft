@@ -88,7 +88,7 @@ fn patched(base: &OpParams, patch: &Value) -> Result<OpParams, String> {
 /// removal (RFC 7386) and has nothing to keep; an object is checked key
 /// by key against what came back; any other value is a leaf that must
 /// simply be present.
-fn lost(patch: &Map<String, Value>, back: &Map<String, Value>, prefix: &str) -> Option<String> {
+pub(super) fn lost(patch: &Map<String, Value>, back: &Map<String, Value>, prefix: &str) -> Option<String> {
     for (k, v) in patch {
         if v.is_null() {
             continue;
@@ -114,7 +114,7 @@ fn lost(patch: &Map<String, Value>, back: &Map<String, Value>, prefix: &str) -> 
     None
 }
 
-fn merge(target: &mut Value, patch: &Value) {
+pub(super) fn merge(target: &mut Value, patch: &Value) {
     match (target, patch) {
         (Value::Object(t), Value::Object(p)) => {
             for (k, v) in p {
@@ -185,7 +185,11 @@ pub(super) fn set_stock(env: &mut Env, a: &Map<String, Value>) -> Result<Value, 
 
 pub(super) fn add_operation(env: &mut Env, a: &Map<String, Value>) -> Result<Value, String> {
     let kind = kind_index(req_str(a, "kind")?)?;
-    let tool = req_str(a, "tool")?;
+    // A kind that mounts no library tool (the Wire Contour, #1108) takes
+    // none: an absent or empty "tool" is no tool. A tool named anyway
+    // goes to the command, which refuses it in its own words.
+    let mounts = KindInfo::ALL.get(kind).is_none_or(|k| k.mounts_tool());
+    let tool = if mounts { req_str(a, "tool")? } else { opt_str(a, "tool")?.unwrap_or("") };
     let label = KindInfo::ALL.get(kind).map_or("Operation", |k| k.label);
     let name = match opt_str(a, "name")? {
         Some(n) => n.to_owned(),
@@ -203,6 +207,9 @@ pub(super) fn add_operation(env: &mut Env, a: &Map<String, Value>) -> Result<Val
     // The seed helix follows the tool, as the app's quick-add does.
     if let Some(t) = model::find_by_name(&env.world, tool).and_then(|e| model::tool_of(&env.world, &e)) {
         operation::seed_helix_for_tool(&mut params, t.diameter);
+        // #890: the feed from the tool's row for the document material;
+        // an explicit params patch below still wins.
+        crate::cutting_rows::seed_feed_for_tool(&env.world, &mut params, &t);
     }
     if let Some(patch) = a.get("params") {
         params = patched(&params, patch)?;

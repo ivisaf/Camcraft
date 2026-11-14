@@ -87,6 +87,9 @@ pub struct PlaySeed {
     cell: f64,
     /// The model's world facets when the playback is judged.
     part: Option<Vec<Triangle>>,
+    /// The verdict tolerance the colours are gated at, or why the
+    /// program is not judged (#1056, `model_fidelity::program_tol`).
+    tol: Result<f64, String>,
 }
 
 impl PlaySeed {
@@ -95,7 +98,8 @@ impl PlaySeed {
     pub fn gather(world: &flecs_ecs::prelude::World, judged: bool, texels: f64) -> Result<Self, String> {
         let (stock_facets, planned, cell) = display_inputs(world, texels)?;
         let part = if judged { Some(crate::stock_sim::part_facets(world)?) } else { None };
-        Ok(PlaySeed { stock_facets, planned, cell, part })
+        let tol = crate::model_fidelity::program_tol(world);
+        Ok(PlaySeed { stock_facets, planned, cell, part, tol })
     }
 
     /// The move table the transport maps onto (cheap; no field built).
@@ -141,6 +145,7 @@ pub struct FieldPlay {
     target: Option<Arc<Stock>>,
     target_note: Option<String>,
     cell: f64,
+    tol: f64,
 }
 
 impl FieldPlay {
@@ -161,7 +166,7 @@ impl FieldPlay {
     /// Build the fields from a gathered seed - no world needed, so a
     /// worker thread can pay for it.
     pub fn from_seed(seed: PlaySeed) -> Result<Self, String> {
-        let PlaySeed { stock_facets, planned, cell, part } = seed;
+        let PlaySeed { stock_facets, planned, cell, part, tol } = seed;
         let index = PlayIndex::of(&planned);
         let stock = build_stock(&stock_facets, cell)?;
         let mut ops = Vec::with_capacity(planned.len());
@@ -171,7 +176,10 @@ impl FieldPlay {
             ops.push(PlayOp { name: p.name, moves: p.moves, radius: p.radius, ball: p.ball, cone: p.cone, corner: p.corner, start: total, rotary: p.rotary, lathe: p.lathe });
             total = total.saturating_add(n);
         }
-        let (target, target_note) = if let Some(part) = &part {
+        let (target, target_note) = if let (Some(_), Err(why)) = (&part, &tol) {
+            // #1056: no colours off a mesh the gate refuses to judge.
+            (None, Some(why.clone()))
+        } else if let Some(part) = &part {
             build_target(part, cell)
         } else {
             (None, Some("playback shows material, not a verdict - arm Deviate to judge".to_string()))
@@ -190,6 +198,7 @@ impl FieldPlay {
             target: target.map(Arc::new),
             target_note,
             cell,
+            tol: tol.unwrap_or(crate::stock_sim::DEV_TOL),
         })
     }
 
@@ -314,6 +323,7 @@ impl FieldPlay {
             target: self.target.clone(),
             target_note: self.target_note.clone(),
             cell: self.cell,
+            tol: self.tol,
             packed: None,
         }
     }

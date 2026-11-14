@@ -1,5 +1,6 @@
 //! Built-in workholding accessories (#789, part of #339): parallels,
-//! 1-2-3 blocks, step blocks, strap (toe) clamps and soft jaws, each
+//! 1-2-3 blocks, step blocks, strap (toe) clamps, soft jaws and rotary
+//! subplates (#821: the base plate a 4th axis stands on), each
 //! generated from a few dimensions and placed through the fixture
 //! library's insert path (`commands::InsertAccessory`) - a model wearing
 //! `FixtureDef`, judged by the same fixture laws as any meshed fixture.
@@ -14,7 +15,9 @@
 //! +y from y = 0, centred in x. Strap clamp: the toe tip at x = 0, the
 //! strap running toward +x, centred in y; its underside at the clamp
 //! height (the clamped face), the heel block under its far end, the stud
-//! between them from the table up through the strap.
+//! between them from the table up through the strap. Rotary subplate
+//! (#821): the origin on its first locating pin bore, on the underside,
+//! +x toward the second bore (the way `plate::mount` seats a dowel pair).
 //!
 //! Provenance: our own generic geometry and figures (common inch sizes of
 //! shop accessories); no vendor model copied.
@@ -25,6 +28,7 @@ use crate::geometry::{Aabb, Point3, Triangle, quat_conjugate, quat_rotate_point}
 use crate::schema::Location;
 
 pub mod mesh;
+pub mod subplate;
 
 const IN: f64 = 25.4;
 /// No accessory dimension past this (mm): a typo, never a real part.
@@ -60,10 +64,24 @@ pub enum Accessory {
     },
     /// A soft jaw: a block that stands in for a vise jaw.
     SoftJaw { width: f64, height: f64, thickness: f64 },
+    /// A rotary subplate (#821): the base plate a 4th axis is bolted to,
+    /// located on a fixture plate's dowel pair by two pin bores
+    /// `bore_spacing` apart. `bore_x` is the first bore's distance from
+    /// the -x end, `bore_y` the bores' distance from the -y edge. It does
+    /// not turn: it raises the rotary's centerline by its `thickness`.
+    RotarySubplate {
+        length: f64,
+        width: f64,
+        thickness: f64,
+        bore_spacing: f64,
+        bore_x: f64,
+        bore_y: f64,
+        bore_diameter: f64,
+    },
 }
 
 /// The kinds, in the order the dialog lists them.
-pub const KINDS: [&str; 5] = ["parallels", "block", "step_block", "strap_clamp", "soft_jaw"];
+pub const KINDS: [&str; 6] = ["parallels", "block", "step_block", "strap_clamp", "soft_jaw", "rotary_subplate"];
 
 /// One named dimension: the file/MCP key, the label the UI shows, and
 /// the value.
@@ -94,6 +112,7 @@ impl Accessory {
                 clamp_height: IN,
             },
             "soft_jaw" => Self::SoftJaw { width: 6.0 * IN, height: 2.0 * IN, thickness: 0.75 * IN },
+            "rotary_subplate" => subplate::generic(),
             _ => return None,
         })
     }
@@ -107,6 +126,7 @@ impl Accessory {
             Self::StepBlock { .. } => "step_block",
             Self::StrapClamp { .. } => "strap_clamp",
             Self::SoftJaw { .. } => "soft_jaw",
+            Self::RotarySubplate { .. } => "rotary_subplate",
         }
     }
 
@@ -155,6 +175,15 @@ impl Accessory {
             Self::SoftJaw { width, height, thickness } => {
                 vec![d("width", "Width", width), d("height", "Height", height), d("thickness", "Thickness", thickness)]
             }
+            Self::RotarySubplate { length, width, thickness, bore_spacing, bore_x, bore_y, bore_diameter } => vec![
+                d("length", "Length", length),
+                d("width", "Width", width),
+                d("thickness", "Thickness (raises the rotary)", thickness),
+                d("bore_spacing", "Pin bore spacing", bore_spacing),
+                d("bore_x", "First bore from the -X end", bore_x),
+                d("bore_y", "Bores from the -Y edge", bore_y),
+                d("bore_diameter", "Pin bore diameter", bore_diameter),
+            ],
         }
     }
 
@@ -219,6 +248,7 @@ impl Accessory {
                 }
                 Ok(())
             }
+            Self::RotarySubplate { .. } => subplate::check(self),
             _ => Ok(()),
         }
     }
@@ -251,6 +281,7 @@ pub fn label_of(kind: &str) -> &'static str {
         "step_block" => "Step block",
         "strap_clamp" => "Strap clamp",
         "soft_jaw" => "Soft jaw",
+        "rotary_subplate" => "Rotary subplate",
         _ => "Accessory",
     }
 }

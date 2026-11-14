@@ -34,6 +34,7 @@ use super::colorvision::text_inks;
 use super::layout::{group_open, prop_grid};
 use super::theme::Tokens;
 use crate::state::{CommandKind, State};
+use crate::shortcut_keys::chord;
 
 /// The pane's view state.
 #[derive(Default)]
@@ -192,7 +193,7 @@ pub(crate) fn draw(ui: &mut Ui, state: &mut State, pal: &Tokens) {
     match open {
         Some(Ok(d)) => p.editor = Some(MachineFileEditor::new(d)),
         Some(Err(e)) => {
-            ui.label(RichText::new(format!("Cannot open: {e}")).color(inks.error));
+            super::error_text::error_text(ui, inks.error, &format!("Cannot open: {e}"));
         }
         None => {}
     }
@@ -265,13 +266,13 @@ pub(crate) fn draw(ui: &mut Ui, state: &mut State, pal: &Tokens) {
         let ink = if e.is_valid() { pal.accent } else { inks.error };
         ui.label(RichText::new(verdict(e)).color(ink).strong());
         for r in &e.refusals {
-            ui.add(Label::new(RichText::new(r.to_string()).color(inks.error)).wrap());
+            super::error_text::error_text(ui, inks.error, &r.to_string());
         }
         let why = block.clone().flatten();
         let r = ui.add_enabled(why.is_none(), egui::Button::new(USE_FOR_SETUP));
         match &why {
             None => {
-                if r.on_hover_text("Make this the setup's machine (Ctrl+Z undoes it)").clicked() {
+                if r.on_hover_text(format!("Make this the setup's machine ({} undoes it)", chord("Z"))).clicked() {
                     assign = Some(e.source.clone());
                 }
             }

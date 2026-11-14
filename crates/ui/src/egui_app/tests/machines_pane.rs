@@ -118,6 +118,28 @@ fn selecting_a_shipped_machine_shows_its_sheet_and_a_clean_validation() {
     assert_no_commands(&h);
 }
 
+/// #786: the Spindle group states rigid tapping in words - the 770M's
+/// "no" says what it does to a program.
+#[test]
+fn the_sheet_states_rigid_tapping_in_words() {
+    let mut h = blank_harness();
+    h.run();
+    open_machines(&mut h);
+    let m = h
+        .state()
+        .state
+        .machines_pane
+        .list
+        .as_ref()
+        .and_then(|l| l.iter().find(|e| e.name == "Tormach 770M").cloned())
+        .expect("the library lists the 770M");
+    h.get_by_label(&row_label(&m)).click();
+    h.run_steps(2);
+    h.get_by_label("Rigid tapping");
+    h.get_by_label("no - tap cycles are refused");
+    assert_no_commands(&h);
+}
+
 #[test]
 fn a_refused_machine_file_shows_each_refusal_by_name() {
     let text = r#"{

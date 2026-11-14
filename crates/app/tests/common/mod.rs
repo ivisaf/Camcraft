@@ -13,7 +13,9 @@ pub mod bore;
 pub mod cl_read;
 pub mod engine_consumers;
 pub mod engine_fixtures;
+pub mod legacy_program;
 pub mod rotary_bar;
+pub mod solid_part;
 
 use std::path::PathBuf;
 
@@ -246,4 +248,21 @@ pub fn write_golden(name: &str, text: &str) {
     // fail identically - only `\r\n` -> `\n` is absorbed.
     let want = want.replace("\r\n", "\n");
     assert_eq!(want, text, "golden {} is stale; regenerate with WRITE_GOLDEN=1 cargo test", path.display());
+}
+
+/// The text a posted golden of a hand-built posting fixture (no
+/// operation kind, part or tool record makes it) carries in its first
+/// line, in the dialect's comment syntax (#1093). Only the fixture's own
+/// regeneration path writes it; `solid_law_goldens` accepts it only for a
+/// stem no gate-judged op program makes.
+pub const SYNTHETIC_MARKER: &str = "synthetic program, posted for syntax conformance";
+
+/// `out` led by the synthetic marker as a comment in `dialect`'s syntax
+/// (`;` for Siemens and Heidenhain, parentheses for the Fanuc family).
+#[allow(dead_code)]
+pub fn with_synthetic_marker(stem: &str, out: &str) -> String {
+    match stem {
+        "sinumerik" | "heidenhain" => format!("; {SYNTHETIC_MARKER}\n{out}"),
+        _ => format!("({SYNTHETIC_MARKER})\n{out}"),
+    }
 }

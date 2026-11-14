@@ -103,13 +103,16 @@ fn fit_under_stock(
     let vp = fixture::def_of(world, &entity)
         .and_then(|d| d.vise)
         .ok_or_else(|| CommandError::Invalid(format!("'{vise}' is not a built-in vise")))?;
+    // A grip jaw's frame z = 0 is its ledge, not the floor: a fit from
+    // the floor would stand the stock clear of the jaws (#1274 review).
+    if vp.seat_height() > 0.0 {
+        return Err(CommandError::Invalid(format!(
+            "'{vise}' is a grip-jaw vise: it seats the stock on its steps, parallels do not go under it"
+        )));
+    }
     let pose = model::transform_of(world, &entity).unwrap_or_default();
-    let stock = model::stock_world_aabb_for(world, setup).ok_or_else(|| {
-        CommandError::Invalid(format!(
-            "{} has no stock to fit the parallels under",
-            setup.map_or_else(|| "the setup".to_owned(), |s| format!("setup '{s}'"))
-        ))
-    })?;
+    let stock = model::stock_world_aabb_for(world, setup)
+        .ok_or_else(|| CommandError::Needs(crate::vise_fit::no_stock_message(setup, "the parallels under")))?;
     let fit = accessory::fit_parallels(&pose, vp.jaw_height, vp.opening, &stock, thickness, above)
         .map_err(|e| CommandError::Invalid(format!("parallels in '{vise}': {e}")))?;
     let fitted = Accessory::Parallels { height: fit.height, thickness, length, spacing: fit.spacing };
@@ -156,6 +159,11 @@ impl SetAccessory {
             )));
         }
         let facets = params.mesh().map_err(|e| CommandError::Invalid(format!("'{name}': {e}")))?;
+        if let Some(m) = &prev.plate.mount
+            && accessory::subplate::figures(&params).is_some()
+        {
+            crate::commands::fixture_plate::still_seated(world, name, m, &params, &facets)?;
+        }
         let update = UpdateModel::new(world, name, Mesh::from_facets(facets))?;
         let next = FixtureDef { accessory: Some(params), ..prev.clone() };
         Ok(Self { name: name.to_owned(), update, prev, next })

@@ -6,7 +6,7 @@
 //!
 //! Gate map (M4.4): covers app::accessory, app::commands::accessory,
 //! app::commands::insert_fixture, app::project (fixture accessory key),
-//! app::fixture.
+//! app::fixture, sim::fixture.
 
 use std::collections::HashMap;
 
@@ -86,6 +86,9 @@ fn expected(a: &Accessory) -> (f64, [f64; 3], [f64; 3]) {
         Accessory::SoftJaw { width, height, thickness } => {
             (width * height * thickness, [-0.5 * width, 0.0, 0.0], [0.5 * width, thickness, height])
         }
+        Accessory::RotarySubplate { length, width, thickness, bore_x, bore_y, .. } => {
+            (length * width * thickness, [-bore_x, -bore_y, 0.0], [length - bore_x, width - bore_y, thickness])
+        }
         Accessory::StepBlock { steps, rise, run, width } => {
             let n = f64::from(steps);
             (width * run * rise * n * (n + 1.0) / 2.0, [-0.5 * width, 0.0, 0.0], [0.5 * width, n * run, n * rise])
@@ -122,7 +125,7 @@ fn check_solid(a: &Accessory, what: &str) {
 
 #[test]
 fn every_kind_builds_closed_shells_of_its_dimensions() {
-    assert_eq!(accessory::KINDS, ["parallels", "block", "step_block", "strap_clamp", "soft_jaw"]);
+    assert_eq!(accessory::KINDS, ["parallels", "block", "step_block", "strap_clamp", "soft_jaw", "rotary_subplate"]);
     for kind in accessory::KINDS {
         let a = Accessory::default_of(kind).expect(kind);
         assert_eq!(a.kind(), kind);
@@ -198,7 +201,7 @@ fn placing_and_resizing_are_one_undo_each_and_survive_a_save() {
         names.push(cmd.name().to_owned());
         history.execute(&world, cmd);
     }
-    assert_eq!(names, ["Parallels", "1-2-3 block", "Step block", "Strap clamp", "Soft jaw"]);
+    assert_eq!(names, ["Parallels", "1-2-3 block", "Step block", "Strap clamp", "Soft jaw", "Rotary subplate"]);
     let clamp = "Strap clamp";
     let e = model::find_by_name(&world, clamp).expect("placed");
     let rev = model::rev_of(&world, &e);
@@ -237,7 +240,7 @@ fn placing_and_resizing_are_one_undo_each_and_survive_a_save() {
     assert_eq!(model::rev_of(&world, &e), rev);
     assert_eq!(model::facets_of(&world, &e).expect("facets").to_vec(), before, "the steel comes back");
     assert!(history.undo(&world));
-    assert!(model::find_by_name(&world, "Soft jaw").is_none(), "one undo removes the last placement");
+    assert!(model::find_by_name(&world, "Rotary subplate").is_none(), "one undo removes the last placement");
     assert!(model::find_by_name(&world, clamp).is_some());
     assert!(history.redo(&world));
     assert!(history.redo(&world));

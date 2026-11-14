@@ -13,11 +13,17 @@ milling. A mill-turn shows both.
 
 | Group | Operations |
 |---|---|
-| Milling 2D | Face, Contour, Pocket, Slot, Trace, Adaptive, Offset, Engrave, Chamfer, Circular, Thread |
+| Milling 2D | Face, Contour, Pocket, Slot, Trochoidal slot, Trace, Adaptive, Offset, Engrave, Chamfer, Circular, Thread |
 | Milling 3D | 3D Pocket, 3D Finish, Deburr |
 | Drilling | Drill, Bore, Probe |
 | Multi-axis | 5-Axis Contour, 5-Axis Parallel, Swarf, Adv. Swarf, Rotary Contour, Rotary Parallel, Rotary Offset, Multi-Axis Rough, 5-Axis Flow, Multi-Axis Contour |
 | Turning | Facing, Profile Rough, Profile Finish, Groove Rough, Groove Finish, Part, Threading, Chamfer, Taper, Multi-Pass, Form, Bore |
+| Plasma | Plasma Profile |
+| Wire EDM | Wire Contour |
+| Sinker EDM | Sinker Burn, Side Burn |
+
+Each 3D milling kind has its own section, with its settings, defaults
+and common refusals, in [3D milling operations](@/guide/operations-3d.md).
 
 Some kinds carry several strategies. The 3D kinds cover adaptive roughing
 per level, waterline, parallel, scallop, radial, spiral, morph, flow,
@@ -25,6 +31,9 @@ pencil and steep/shallow finishing. Drill covers spot, drill, peck, deep,
 tap and bore cycles, and **Detect holes** finds the holes in the model for
 you. Milling operations can also be indexed (3+2) to a tilted plane on a
 machine that can tilt.
+
+Each 2D milling and hole kind has its own section, with its settings,
+defaults and common refusals, in [2D milling operations](@/guide/operations-2d.md).
 
 ## The settings tabs
 
@@ -45,7 +54,10 @@ tabs it has settings for:
   their own.
 
 Edits on a page are pending until you click **Apply** or **Generate**.
-Both are undoable with Ctrl+Z.
+Both are undoable with Ctrl+Z (Cmd+Z on macOS).
+
+Each turning kind has its own section, with its settings, defaults and
+common refusals, in [Turning operations](@/guide/operations-turning.md).
 
 ## What a click picks
 
@@ -69,9 +81,14 @@ same rule:
   plane is picked by a face, so it never snaps to an edge.
 
 Edge mode picks the face between the edges when no edge is under the
-cursor; Alt+click picks a single edge segment instead of the whole chain.
+cursor; Alt+click (Option+click on macOS) picks a single edge segment instead of the whole chain.
 The same rule holds for picks an AI agent makes over MCP by feature id: an
 id a click could not have picked is refused by name.
+
+## Order
+
+Operations post in the order the browser lists them. Which order to choose,
+and why, is covered in [Order of operations](@/guide/order-of-operations.md).
 
 ## Generating
 
@@ -98,3 +115,10 @@ can be clicked to frame it.
 - **Deviate** compares the machined stock with the model and colours where
   material is left or where the program cut into the part. **Frame rest**
   and **Frame gouge** take the view to the worst spot of each.
+
+The multi-axis kinds, Probe, Plasma Profile and the EDM kinds (Wire
+Contour, Sinker Burn, Sinker Side Burn) each have their own reference, with settings, defaults and common refusals:
+[Multi-axis operations](@/guide/operations-multiaxis.md),
+[Probing](@/guide/operations-probing.md),
+[Plasma cutting](@/guide/operations-plasma.md) and
+[Wire and sinker EDM](@/guide/operations-edm.md).

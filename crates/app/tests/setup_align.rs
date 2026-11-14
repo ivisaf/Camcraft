@@ -9,7 +9,7 @@
 //!
 //! Gate map (#326): covers app::setup_align, app::commands
 //! (AlignPartToSetup, MoveModel, CreateSetup), app::operation (job,
-//! material, heights, stamp), app::stock_sim (part_facets),
+//! material, heights, stamp), app::stock_sim, sim::stock_sim (part_facets),
 //! app::project (save, load, open), app::posting.
 //! Lane shape (M4.4): all tests here run in seconds.
 
@@ -17,8 +17,9 @@ use flecs_ecs::prelude::World;
 
 use camcraft_app::commands::{
     AddTool, AlignPartToSetup, CreateOperation, CreateSetup, GenerateOperation, History, ImportModel,
-    SetStock,
+    LoadMachine, SetStock,
 };
+use camcraft_app::machine::parse_mch;
 use camcraft_app::geometry::{Mesh, Point3, Triangle, cube};
 use camcraft_app::machining2d::{Lead, Side};
 use camcraft_app::machining3d::Entry3D;
@@ -348,4 +349,22 @@ fn the_setup_sheet_names_the_part_alignment() {
     align(&world, &mut h, AlignPreset::TurnZ90);
     let sheet = camcraft_app::setup_sheet::render(&world, Some("Setup1")).expect("sheet");
     assert!(sheet.contains("  Turn 90° about Z - clamp"), "{sheet}");
+}
+
+/// #1230: an aligned setup on a machine that is not a mill is refused
+/// with that machine's kind named (the same refusal as before, only the
+/// words changed); a lathe or mill-turn keeps its own wording in the
+/// carry tests.
+#[test]
+fn an_aligned_setup_on_an_edm_names_the_edm_kind_it_is_refused_on() {
+    let machines = [("sinker EDM", include_str!("edm/sinker-edm.mch")), ("wire EDM", include_str!("edm/wire-edm.mch"))];
+    for (name, text) in machines {
+        let (world, mut h) = document(60.0);
+        let m = parse_mch(text).expect("the EDM machine parses");
+        h.execute(&world, LoadMachine::new(&world, "edm.mch".into(), Some(m)).expect("mount"));
+        align(&world, &mut h, AlignPreset::FlipY);
+        let err = generate(&world, &mut h, "Contour1").expect_err("an aligned EDM setup is refused");
+        assert!(err.contains(&format!("an aligned part is not supported yet on a {name} machine")), "{name}: {err}");
+        assert!(!err.contains("lathe") && !err.contains("mill-turn"), "{name}: {err}");
+    }
 }

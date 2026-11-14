@@ -46,9 +46,29 @@ pub struct SimClause {
     pub not_judged: Option<String>,
 }
 
-/// Run the program sim and read its outcome for the gate.
+/// Run the program sim and read its outcome for the gate. A void
+/// raw-stock-only mark (#1094) and a verdict judged off the shipped
+/// carry engine (#1168) ride the visible, non-blocking line.
 #[must_use]
 pub fn sim_clause(world: &World) -> SimClause {
+    let mut clause = judge_clause(world);
+    // #1168: a verdict the field engine judged says so, never silently.
+    let notes = [crate::stock_source::void_note(world), crate::stock_sim::carry_engine_note()];
+    for note in notes.into_iter().flatten() {
+        clause.not_judged = Some(match clause.not_judged.take() {
+            Some(line) => format!("{line}; note: {note}"),
+            None => format!("note: {note}"),
+        });
+    }
+    clause
+}
+
+fn judge_clause(world: &World) -> SimClause {
+    // #1094: a stock source marked raw stock only, with no other model,
+    // leaves nothing judged as the part - refused by name, never passed.
+    if let Some(why) = crate::stock_source::nothing_judged(world) {
+        return SimClause { problem: Some(why), not_judged: None };
+    }
     match crate::stock_sim::simulate_document(world) {
         Ok(sim) if sim.dev.gouge_cells > 0 => {
             let u = crate::units::of(world);
@@ -65,10 +85,11 @@ pub fn sim_clause(world: &World) -> SimClause {
             );
             SimClause {
                 problem: Some(format!(
-                    "gouge: program cuts below the model in {} cell(s), worst {} {}{at}",
+                    "gouge: program cuts below the model in {} cell(s), worst {} {}{at}{}",
                     sim.dev.gouge_cells,
                     crate::units::len(sim.dev.max_gouge, u, 2),
-                    u.suffix()
+                    u.suffix(),
+                    crate::stock_source::gouge_hint(world, sim.dev.max_gouge_at).unwrap_or_default() // #1094
                 )),
                 not_judged: None,
             }

@@ -1,6 +1,6 @@
 //! The MCP built-in accessory tools (#789): place a generic workholding
 //! accessory (parallels, a 1-2-3 block, a step block, a strap clamp, a
-//! soft jaw) into a setup - at a pose, or parallels fitted under the
+//! soft jaw, a rotary subplate - #821) into a setup - at a pose, or parallels fitted under the
 //! stock inside a built-in vise - and resize a placed one. Each is the
 //! very undoable command the Fixtures page queues (`InsertAccessory`,
 //! `SetAccessory`), one History step, so `undo` takes it back.
@@ -20,7 +20,7 @@ use crate::script::{Env, fnum};
 use serde_json::{Map, Value, json};
 
 pub(super) const TOOLS: &[Tool] = &[
-    Tool { name: "add_accessory", description: "Place a built-in workholding accessory as a fixture of a setup (the active one by default): parallels (a pair), block (1-2-3 block), step_block, strap_clamp (strap, stud and heel block; the toe tip at the frame origin on the table, the strap running +X, its underside at clamp_height) or soft_jaw. Either at a position/rotation of its frame (z = 0 its underside), or - parallels only - under_stock_in_vise: the parallels' height is set so the stock's top stands `above` mm over that built-in vise's jaws, and the vise drops to suit. Optional dimension overrides in mm. One undoable step; nonsense dimensions are refused by name.", schema: s_add, run: add_accessory },
+    Tool { name: "add_accessory", description: "Place a built-in workholding accessory as a fixture of a setup (the active one by default): parallels (a pair), block (1-2-3 block), step_block, strap_clamp (strap, stud and heel block; the toe tip at the frame origin on the table, the strap running +X, its underside at clamp_height), soft_jaw or rotary_subplate (#821: the base plate a 4th axis is bolted to - generic default figures, enter your own; its frame's origin on the first pin bore at the underside, +X toward the second; it lands fixed, then goes on a fixture plate's dowel pair with place_on_plate, and its thickness - with every plate under it - raises the rotary's centerline for the index-swing check; its height over the machine table counts too, the larger winning, so one placed on a plate by position is never judged on its own thickness alone). Either at a position/rotation of its frame (z = 0 its underside), or - parallels only - under_stock_in_vise: the parallels' height is set so the stock's top stands `above` mm over that built-in vise's jaws, and the vise drops to suit. Optional dimension overrides in mm. One undoable step; nonsense dimensions are refused by name.", schema: s_add, run: add_accessory },
     Tool { name: "set_accessory", description: "Resize a placed built-in accessory: dimension overrides in mm (and steps for a step block). The mesh is regenerated; one undoable step.", schema: s_set, run: set_accessory },
 ];
 
@@ -98,7 +98,7 @@ fn set_accessory(env: &mut Env, args: &Map<String, Value>) -> Result<Value, Stri
 
 fn dims_schema() -> Value {
     json!({ "type": "object", "additionalProperties": { "type": "number" },
-        "description": "Dimension overrides, mm. parallels: height, thickness, length, spacing. block: length, width, height. step_block: rise, run, width. strap_clamp: strap_length, strap_width, strap_thickness, stud_diameter, stud_height (above the strap), stud_offset (toe to stud centre), heel_length, clamp_height. soft_jaw: width, height, thickness." })
+        "description": "Dimension overrides, mm. parallels: height, thickness, length, spacing. block: length, width, height. step_block: rise, run, width. strap_clamp: strap_length, strap_width, strap_thickness, stud_diameter, stud_height (above the strap), stud_offset (toe to stud centre), heel_length, clamp_height. soft_jaw: width, height, thickness. rotary_subplate: length, width, thickness, bore_spacing, bore_x (first bore from the -X end), bore_y (bores from the -Y edge), bore_diameter." })
 }
 
 fn s_add() -> Value {

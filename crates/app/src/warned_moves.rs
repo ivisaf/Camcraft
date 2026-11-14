@@ -31,7 +31,8 @@ pub fn moves_named(w: &Warning) -> [Option<usize>; 2] {
         | Warning::NonFinite { at }
         | Warning::Envelope { at, .. }
         | Warning::Scallop { at, .. }
-        | Warning::ProbeSearch { at, .. } => [Some(*at), None],
+        | Warning::ProbeSearch { at, .. }
+        | Warning::SinkerFinishOrder { at, .. } => [Some(*at), None],
         Warning::RestUnjudged { .. } => [None, None],
     }
 }

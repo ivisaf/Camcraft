@@ -26,6 +26,10 @@ pub struct SetupPostOptionsDto {
     /// before it read the same.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub smoothing: bool,
+    /// #1386's Explain G-code: absent is off, so files written before
+    /// it read the same.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explain: bool,
 }
 
 impl SetupPostOptionsDto {
@@ -44,6 +48,7 @@ impl SetupPostOptionsDto {
                 EndUnits::Millimeters => Some("mm".to_owned()),
             },
             smoothing: o.smoothing,
+            explain: o.explain,
         }
     }
 
@@ -61,6 +66,6 @@ impl SetupPostOptionsDto {
             Some("mm") => EndUnits::Millimeters,
             Some(other) => return Err(format!("setup '{setup}' names an unknown end-of-program unit {other:?}")),
         };
-        Ok(PostOptions { threading, skip_stops: self.skip_stops, per_op: self.per_op_files, end_units, smoothing: self.smoothing })
+        Ok(PostOptions { threading, skip_stops: self.skip_stops, per_op: self.per_op_files, end_units, smoothing: self.smoothing, explain: self.explain })
     }
 }

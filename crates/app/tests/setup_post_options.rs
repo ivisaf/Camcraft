@@ -198,6 +198,7 @@ fn own_post_options_round_trip_and_old_files_follow_the_document() {
         per_op: true,
         end_units: camcraft_app::schema::EndUnits::Inch,
         smoothing: true,
+        explain: false,
     };
     h.execute(&world, SetSetupPostOptions::new(&world, "Setup2", Some(own)).expect("own options"));
     let text = saved(&world, "rt");

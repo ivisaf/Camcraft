@@ -16,6 +16,8 @@ minimumRevision = 1;
 extension = "nc";
 setCodePage = "utf-8";
 capabilities = 1; // reference contract: integer feature mask (bit 1 = milling)
+coolantModes = true; // reads PARAM Coolant (#869): the op's ask is posted, or refused by name
+programUnits = "mm"; // #902: millimetres only - the engine refuses an inch document by name
 
 // Determinism law: no timestamps, no randomness - the same stream
 // always posts to the same text (golden files depend on it).
@@ -27,6 +29,8 @@ var spindleWait = false;   // TOOL, SECTION - the preamble writes them
 var toolWait = false;      // when the first motion needs them legal
 var tNo = 0;
 var coolant = "";          // the M-code this section started, if any
+var coolantAsk = "flood";  // the section's PARAM Coolant (#869), flood when unstated
+var coolantOp = "";        // the section's OperationName, for refusals
 var sectionOpen = false;   // preamble written (a legacy .cl carries no SECTION)
 var orgX = 0, orgY = 0, orgZ = 0; // the WCS slot origin (OriginX/Y/Z PARAMs)
 var pendingDwell = null;   // a drilling dwell owed at its hole's bottom
@@ -35,7 +39,9 @@ var smoothMode = "";        // #616: "finish" or "rough"
 
 // ------------------------------------------------------------ helpers
 // The firmware is millimetres only (its G20 "will halt the machine"), so
-// every length is mm at three decimals and every feed whole mm/min.
+// every length is mm at three decimals and every feed whole mm/min; an
+// inch document is refused by the engine before this script runs
+// (`programUnits = "mm"`, #902) - never mm numbers for an inch program.
 function has(v) { return v !== null && v !== undefined && isFinite(v); }
 function trim(s) {
   if (s.indexOf(".") >= 0) s = s.replace(/0+$/, "").replace(/\.$/, "");
@@ -58,6 +64,29 @@ function xyz(p) { return [wo("X", p.X, orgX), wo("Y", p.Y, orgY), wo("Z", p.Z, o
 function msg(s) {  // counted warning where the host offers message()
   if (typeof message === "function") message(s); else writeln("(" + s + ")");
 }
+
+// #1359 (from #1357): a cut needs a turning spindle. spindleOn is true
+// from the preamble's spindle start (M3 S..) to the next M5 (every
+// section end, and a touch probe's stop). A touch probe's section feeds
+// its stylus with the spindle stopped on purpose: a section is a
+// probe's only when it states 0 rpm (#574) AND its tool is a touch
+// probe (PARAM ToolKind) - a cutter whose speed reads 0 is a stopped
+// spindle, not a probe. A feed, arc or cycle with the spindle stopped
+// anywhere else is refused by name and not posted: a stream that states
+// no spindle speed would otherwise drag a stopped cutter through the
+// part. Once per program.
+var spindleOn = false;
+var probeSection = false;
+var kindProbe = false;    // this section's PARAM ToolKind names a touch probe
+var spindleRefused = false;
+function spindleStopped(what) {  // true: refused, nothing is posted
+  if (spindleOn || probeSection) return false;
+  if (!spindleRefused) {
+    spindleRefused = true;
+    msg(what + " with the spindle stopped - no spindle start (M3 S..) precedes it; state the operation's spindle speed");
+  }
+  return true;
+}
 var tiltRefused = false;  // one named refusal per program, not per line
 function tiltOk(p) {  // this post is 3-axis: a tilted record is refused
   if (!has(p.A)) return true;
@@ -65,21 +94,37 @@ function tiltOk(p) {  // this post is 3-axis: a tilted record is refused
   return false;
 }
 
-// The machine file's coolant list: the Carvera's only entry is its air
-// blast (M7 "starts the airflow", M9 stops it). The first Flood entry,
-// else the first entry at all, is the section's on code.
-function coolantCode() {
+// The machine file's coolant list (#869): the op's ask is the code the
+// machine states for it - the Carvera's air blast is its `Air` entry (M7
+// "starts the airflow", M9 stops it). A flood ask takes the Flood entry,
+// failing one the first coded entry of no known family (a shop's own
+// name); a stated codeless Flood is the operator's own valve, silent. A
+// list that states only other kinds (an Air-only Carvera) has no flood
+// code: refused by name - never M7 posted for a flood ask, never M8 for
+// an air ask, never silently dry. An unstated list stays silent.
+var COOLANT_KINDS = ["flood", "mist", "air", "air-blast", "through-spindle", "through-tool"];
+function coolantWho() { return coolantOp ? "operation " + coolantOp + ": " : ""; }
+function coolantName(c) {
+  return String((typeof c === "string") ? c : (c.name || "")).trim().toLowerCase().replace(/[\s_]+/g, "-");
+}
+function coolantFor(ask) {
+  if (ask === "off") return "";
   var cs = (typeof machine !== "undefined" && machine.coolants) || [];
-  var first = "";
+  var flood = !ask || ask === "flood";
+  var want = flood ? ["flood"] : (ask === "mist" ? ["mist"] : (ask === "air" ? ["air", "air-blast"]
+    : (ask === "through-tool" ? ["through-spindle", "through-tool"] : [])));
+  if (want.length === 0) { msg(coolantWho() + "unknown coolant ask " + ask); return ""; }
+  var other = "", named = false;
   for (var i = 0; i < cs.length; i++) {
     var c = cs[i];
     var code = (typeof c === "string") ? "" : (c.mCode || "");
-    var name = (typeof c === "string") ? c : (c.name || "");
-    if (!code) continue;
-    if (name === "Flood") return code;
-    if (!first) first = code;
+    var name = coolantName(c);
+    if (want.indexOf(name) >= 0) { if (code) return code; if (flood) named = true; continue; }
+    if (flood && code && !other && COOLANT_KINDS.indexOf(name) < 0) other = code;
   }
-  return first;
+  if (flood && (other || named || cs.length === 0)) return other;
+  msg(coolantWho() + "the machine states no " + (flood ? "flood" : ask) + " coolant code - pick the operation's coolant from the machine's list (Air for the Carvera's air blast; Off cuts dry) or add it to the machine");
+  return "";
 }
 
 // ------------------------------------------------------------ the plane
@@ -127,7 +172,7 @@ function commentParam(name, value) {
   if (name === "SetupName") setupName = clean(value);
   else if (name === "OperationName") opName = clean(value);
   else if (name === "OperationKind") opKind = clean(value).toUpperCase();
-  else if (name === "ToolKind") toolKind = clean(value).toUpperCase();
+  else if (name === "ToolKind") { toolKind = clean(value).toUpperCase(); kindProbe = toolKind === "TOUCH PROBE"; }
   else if (name === "ToolDiameter" && has(value)) toolDia = Number(value);
   else if (name === "ToolCornerRadius" && has(value)) toolCr = Number(value);
 }
@@ -151,9 +196,6 @@ function toolNote() {
 // (absolute), G94 (feed per minute). No G40 / G49 / G80: the table lists
 // none of them (no cutter comp, no tool length word, no canned cycles).
 function onOpen() {
-  if (typeof machine !== "undefined" && machine.units === "inch") {
-    msg("the Carvera firmware runs in millimetres only (G20 halts the machine) - the machine file must be metric");
-  }
   var nm = (typeof machine !== "undefined" && machine.name) || "CAMCRAFT";
   note(clean(nm) || "CAMCRAFT");
   block(["G21", "G17", "G90", "G94"]);
@@ -168,6 +210,8 @@ function onRadiusCompensation() {
 function onParameter(name, value) {
   if (name === "Smoothing") { smoothTol = Number(value) || 0; return; }
   if (name === "SmoothingMode") { smoothMode = String(value || ""); return; }
+  if (name === "Coolant") { coolantAsk = String(value || "flood"); return; }
+  if (name === "OperationName") coolantOp = String(value || "");
   commentParam(name, value);
   if (name === "WorkOffset" && value) wcsWord = String(value);
   else if (name === "OriginX" && has(value)) orgX = Number(value);
@@ -228,9 +272,13 @@ function startPreamble() {
     block(["M6", "T" + ni(tNo)]);
     toolWait = false;
   }
-  if (spindleWait && sRpm > 0) block(["M3", "S" + ni(sRpm)]);
+  var touchProbe = spindleWait && !(sRpm > 0);   // a stated speed of 0
+  probeSection = touchProbe && kindProbe;
+  if (spindleWait && sRpm > 0) { block(["M3", "S" + ni(sRpm)]); spindleOn = true; }
   spindleWait = false;
-  coolant = coolantCode();
+  // #995: a touch probe section starts no coolant (nor air), whatever
+  // its ask - the Carvera posts no probing, but the law holds here too.
+  coolant = touchProbe ? "" : coolantFor(coolantAsk);
   if (coolant) block([coolant]);
   smoothOn();
 }
@@ -242,7 +290,12 @@ function endPreamble() {
   sectionOpen = false;
   smoothOff();
   if (coolant) block(["M9"]);
+  coolant = "";
+  coolantAsk = "flood";      // the next section states its own ask
   block(["M5"]);
+  spindleOn = false;
+  probeSection = false;
+  kindProbe = false;         // the next section states its own tool kind
 }
 
 function onSection() { startPreamble(); }
@@ -278,6 +331,7 @@ function onRapid() {
 function onLinear() {
   startPreamble();
   if (!tiltOk(properties)) return;
+  if (spindleStopped("feed move G1")) return;
   startXY(properties);
   block(["G1"].concat(xyz(properties), [fw(properties.FeedRate)]));
   dwellAtBottom(properties.Z);
@@ -285,6 +339,7 @@ function onLinear() {
 function onCircular() {
   startPreamble();
   if (!tiltOk(properties)) return;
+  if (spindleStopped("arc move " + (properties.CircularDirection === "CW" ? "G2" : "G3"))) return;
   var p = properties;
   startXY(p);
   block([

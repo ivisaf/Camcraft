@@ -40,15 +40,12 @@ impl ToolBodySpec {
     /// holds no facets, or if coordinate systems are absent or ambiguous.
     pub fn from_step_auto(path: &Path) -> Result<Self, String> {
         let data = std::fs::read(path).map_err(|e| format!("I/O error: {e}"))?;
-        let mesh = crate::geometry::import::load_model(path).map_err(|e| e.to_string())?;
-        if mesh.facets.is_empty() {
-            return Err("the file holds no facets".into());
-        }
+        // #361: the one body-file door (a reduced-fidelity mesh is refused).
+        let file = crate::tool_body_file::read(path)?;
         let report = crate::geometry::import::step_csys::read_tool_csys(&data)
             .map_err(|e| format!("coordinate systems unreadable: {e}"))?;
         let (axis, offset) = report.align_tool_body()?;
-        let source = path.file_name().map_or_else(|| path.display().to_string(), |f| f.to_string_lossy().into_owned());
-        Ok(ToolBodySpec { source, facets: mesh.facets.to_vec(), axis, offset })
+        Ok(ToolBodySpec { source: file.source, facets: file.facets, axis, offset })
     }
 }
 
@@ -85,6 +82,13 @@ pub(crate) fn library_body(
     let body = tool_body::build_spun(spun);
     tool_body::fits(tool, &body).map_err(|e| CommandError::Invalid(format!("tool '{name}': {e}")))?;
     Ok(body)
+}
+
+/// A body file through the one door (#361): an importer error stays an
+/// import error; a mesh the door will not take is refused by name.
+fn body_file(path: &Path) -> Result<crate::tool_body_file::BodyFile, CommandError> {
+    let graded = crate::geometry::import::load_model_graded(path)?;
+    crate::tool_body_file::accept(path, graded).map_err(CommandError::Invalid)
 }
 
 /// Set (`Some`) or clear (`None`) a tool's body.
@@ -166,9 +170,8 @@ impl SetToolBody {
 
     /// Read a STEP / STL / OBJ through the model importer and place it.
     pub fn from_file(world: &World, name: &str, path: &Path, axis: [f64; 3], offset: f64) -> Result<Self, CommandError> {
-        let mesh = crate::geometry::import::load_model(path)?;
-        let source = path.file_name().map_or_else(|| path.display().to_string(), |f| f.to_string_lossy().into_owned());
-        Self::new(world, name, Some(ToolBodySpec { source, facets: mesh.facets.to_vec(), axis, offset }))
+        let file = body_file(path)?;
+        Self::new(world, name, Some(ToolBodySpec { source: file.source, facets: file.facets, axis, offset }))
     }
 
     /// Read a STEP file, align it automatically by its ISO 13399
@@ -205,9 +208,8 @@ impl SetToolBody {
     /// Read a STEP / STL / OBJ through the model importer and place it
     /// as a lathe body.
     pub fn lathe_from_file(world: &World, name: &str, path: &Path, place: LathePlacement) -> Result<Self, CommandError> {
-        let mesh = crate::geometry::import::load_model(path)?;
-        let source = path.file_name().map_or_else(|| path.display().to_string(), |f| f.to_string_lossy().into_owned());
-        Self::lathe(world, name, Some(LatheBodySpec { source, facets: mesh.facets.to_vec(), place, zone: None }))
+        let file = body_file(path)?;
+        Self::lathe(world, name, Some(LatheBodySpec { source: file.source, facets: file.facets, place, zone: None }))
     }
 
     /// Set (`Some`) or clear (`None`) the insert zone (#396) of tool

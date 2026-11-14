@@ -6,11 +6,13 @@
 //! law, worn by the options. Every arm is one undoable command. The tool
 //! list export is a read of the document plus a file write: no command,
 //! no history (the setup-sheet law).
+//! The setup's stated nose-to-rotary figure (#821) lands here too: one
+//! undoable `SetSetupNoseToAxis`.
 //! Provenance: our own routing law (issue #389); no vendor material consulted.
 
 use std::path::{Path, PathBuf};
 
-use camcraft_app::commands::{CommandError, SetPostOptions, SetSetupPostOptions};
+use camcraft_app::commands::{CommandError, SetPostOptions, SetSetupNoseToAxis, SetSetupPostOptions};
 use camcraft_app::schema::PostOptions;
 use camcraft_app::{setup, setup_post_options, tool_list_export};
 
@@ -60,6 +62,21 @@ impl State {
                 };
             }
             Err(err) => self.refuse(ErrorScope::Setup, format!("post options not changed: {err}")),
+        }
+    }
+
+    /// #821: `setup` states its own nose-to-rotary figure (mm), or clears it.
+    pub(super) fn set_setup_nose(&mut self, setup: &str, value: Option<f64>) {
+        match SetSetupNoseToAxis::new(&self.world, setup, value) {
+            Ok(c) => {
+                self.history.execute(&self.world, c);
+                self.doc_version += 1;
+                self.status = match value {
+                    Some(v) => format!("{setup} states nose_to_axis {v:.3} mm"),
+                    None => format!("{setup} judges its rotary from the machine's nose_to_axis less its stack"),
+                };
+            }
+            Err(err) => self.refuse(ErrorScope::Setup, format!("nose_to_axis not changed: {err}")),
         }
     }
 

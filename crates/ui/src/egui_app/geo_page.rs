@@ -11,13 +11,27 @@ use egui::{RichText, Ui};
 
 use camcraft_app::operation::{self, FeatureSel, GeoSel, SrcRef};
 
+use crate::shortcut_keys::{chord, command_key};
 use crate::state::{CommandKind, ErrorScope, GeoPick, State};
 
 use super::colorvision::text_inks;
 use super::layout::group;
 
-/// The Edge mode's one-line hint: how a loop gets closed.
-pub const EDGE_HINT: &str = "Ctrl+click adds an edge · Shift+click picks the whole loop";
+/// The Edge mode's one-line hint: how a loop gets closed. The add key is
+/// the platform command key (Cmd on macOS), the one the pick reads
+/// (`mods.command`, #1238).
+pub fn edge_hint() -> String {
+    format!("{} adds an edge · Shift+click picks the whole loop", chord("click"))
+}
+
+/// The "Click selects" hover: what each modifier does to a viewport pick.
+pub fn click_selects_hint() -> String {
+    format!(
+        "Click in the viewport - {key} adds; in Edge mode Shift takes the whole loop and Alt one edge. \
+         {key}+drag adds every visible edge (Edge) or face (Face) in a box - hidden ones too with Pick through on: drag right for what lies inside it, left for what it touches.",
+        key = command_key()
+    )
+}
 
 pub(super) fn pick_block(ui: &mut Ui, state: &mut State, target: &str, live_setup: Option<&str>) {
     group(ui, "Selection", None, |ui| body(ui, state, target, live_setup));
@@ -27,7 +41,7 @@ fn body(ui: &mut Ui, state: &mut State, target: &str, live_setup: Option<&str>) 
     // Viewport pick mode - transient view state: the mode itself is not
     // undoable; what a Face/Edge click changes is.
     ui.horizontal_wrapped(|ui| {
-        ui.label("Click selects:").on_hover_text("Click in the viewport - Ctrl adds; in Edge mode Shift takes the whole loop and Alt one edge.");
+        ui.label("Click selects:").on_hover_text(click_selects_hint());
         let mut pick_mode = match state.geo_pick {
             GeoPick::Model => 0,
             GeoPick::Face => 1,
@@ -48,7 +62,7 @@ fn body(ui: &mut Ui, state: &mut State, target: &str, live_setup: Option<&str>) 
     if state.geo_pick == GeoPick::Edge {
         // Multi-select was there but nobody could find it (user hand
         // test 2026-11-06): say it where the mode is chosen.
-        ui.label(RichText::new(EDGE_HINT).weak());
+        ui.label(RichText::new(edge_hint()).weak());
     }
     if state.op_ui.src_kind == 2 {
         chips(ui, state, target);
@@ -83,7 +97,7 @@ fn body(ui: &mut Ui, state: &mut State, target: &str, live_setup: Option<&str>) 
         .filter(|m| m.starts_with("geometry selection not updated") || m.starts_with("links not updated"))
         .map(str::to_owned);
     if let Some(msg) = refusal.or(door) {
-        ui.colored_label(text_inks(ui, &state.world).error, msg);
+        super::error_text::error_text(ui, text_inks(ui, &state.world).error, &msg);
     }
     if state.op_ui.src_kind == 1 && !state.op_ui.src_name.is_empty() {
         let n = state.op_ui.src_name.clone();

@@ -27,6 +27,7 @@ capabilities = 2; // reference contract: integer feature mask (bit 2 = turning)
 coolantModes = true; // reads PARAM Coolant (#112/#150)
 afterModes = true;   // reads PARAM AfterOperation (#110)
 threadHands = true;  // reads PARAM SpindleDirection (#629): M4 when the thread's hand needs it
+programUnits = "mm inch"; // #902: writes the document's unit (postOptions.Units), G21 / G20
 // liveTooling is NOT declared: PathPilot's lathe tables list no C axis
 // and no live-tool words, so the engine refuses a C-axis section by
 // name before this script ever sees it.
@@ -48,17 +49,22 @@ threadHands = true;  // reads PARAM SpindleDirection (#629): M4 when the thread'
 //    touched-off corner. This script never shifts a point; it writes
 //    the orientation in the tool note so the setup can be checked
 //    against the tool table's Q.
-//  - Units from the machine: G20 (every length / 25.4, four decimals,
+//  - Units from the document (#902): G20 (every length / 25.4, four decimals,
 //    feeds per rev at five, pitches at six) or G21 (mm, three decimals,
 //    feeds per rev at four, pitches at six). Angles and rpm never scale.
 //  - G95 feed per revolution for every cut: F = mm/min / rpm (/ 25.4 on
-//    an inch machine), so the cut speed the generator planned is the
+//    an inch program), so the cut speed the generator planned is the
 //    one the control runs. No rpm, no per-rev feed - refused by name.
 //    Nothing this post writes needs G94 (no live tooling, no C axis).
 //  - G97 S constant rpm from the stream's SpindleSpeed; G96 constant
 //    surface speed ONLY when the stream states a SurfaceSpeed PARAM
-//    (m/min; ft/min under G20), with D = the machine's stated maximum
-//    rpm as the cap. M3, unless the stream states PARAM
+//    (m/min; ft/min under G20), with D = the lower of the machine's
+//    stated maximum rpm and the tool's own (PARAM MaxSpindleSpeed,
+//    #891) as the cap; with neither stated the G96 is refused by name
+//    (an unclamped CSS runs away toward the centre). A section that
+//    posted G96 cancels it at its end (G97 after M5, #1173), so every
+//    section opens under G97 unless it states G96 itself, and the
+//    program never ends in CSS. M3, unless the stream states PARAM
 //    SpindleDirection reverse (#629, a thread whose hand needs it):
 //    then M4, with a note to mount the insert for reverse rotation.
 //  - Arcs: G18 ZX arcs with I K centre increments (G91.1, stated), I a
@@ -111,6 +117,8 @@ threadHands = true;  // reads PARAM SpindleDirection (#629): M4 when the thread'
 var wcsWord = "G54";
 var sRpm = 0;              // S/M3 waits for the section (PARAMs, TOOL, SECTION order)
 var sCss = 0;              // SurfaceSpeed PARAM (m/min), 0 = none stated
+var cssOn = false;         // this section posted G96: its end cancels it (#1173)
+var sMax = 0;              // MaxSpindleSpeed PARAM (#891): the tool's own rpm ceiling, 0 = none
 var spindleWait = false;
 var toolWait = false;
 var tNo = 0;
@@ -127,7 +135,7 @@ var threadLead = 0;        // ... and that record's lead (mm/rev), 0 = none stat
 var spinRev = false;       // PARAM SpindleDirection reverse (#629): this section's spindle runs M4
 var refused = {};          // each refusal counted once per program, by name
 var EPS = 0.0005;          // half a micron: the stream's own lattice
-var inch = false;          // the machine is programmed in inches (onOpen)
+var inch = false;          // the document's unit is inch (onOpen, #902: postOptions.Units, never the machine file's)
 var pass = null;           // the G33 pass being merged: { r, z0, z, halves, lead, dir }
 var drillDwell = 0;        // the open hole's floor dwell, seconds (0 = none)
 var drillFloor = null;     // ... and its floor Z (world mm)
@@ -141,11 +149,11 @@ function trim0(s) {
   return s === "-0" ? "0" : s;
 }
 function len(v) { return inch ? v / 25.4 : v; }
-function fu(v) {  // a length, in the machine's unit
+function fu(v) {  // a length, in the program's unit
   if (!has(v)) return "0";
   return trim0(Number(len(v)).toFixed(inch ? 4 : 3));
 }
-function fr(v) {  // a feed per revolution (mm/rev in), in the machine's unit
+function fr(v) {  // a feed per revolution (mm/rev in), in the program's unit
   if (!has(v)) return "0";
   return trim0(Number(len(v)).toFixed(inch ? 5 : 4));
 }
@@ -200,7 +208,7 @@ function posed(p) {
 // machine's Flood entry, failing one the first coded entry of no other
 // known family; a codeless Flood is the operator's own valve, silent;
 // a list of only other kinds is refused by name. M9 is the fixed stop.
-var COOLANT_KINDS = ["flood", "mist", "through-spindle", "through-tool"];
+var COOLANT_KINDS = ["flood", "mist", "air", "air-blast", "through-spindle", "through-tool"];
 function coolantWho() { return coolantOp ? "operation " + coolantOp + ": " : ""; }
 function coolantName(c) {
   return String((typeof c === "string") ? c : (c.name || "")).trim().toLowerCase().replace(/[\s_]+/g, "-");
@@ -222,7 +230,7 @@ function coolantCode() {
 function coolantFor(ask) {
   if (ask === "off") return "";
   if (!ask || ask === "flood") return coolantCode();
-  var want = ask === "mist" ? ["mist"] : (ask === "through-tool" ? ["through-spindle", "through-tool"] : []);
+  var want = ask === "mist" ? ["mist"] : (ask === "air" ? ["air", "air-blast"] : (ask === "through-tool" ? ["through-spindle", "through-tool"] : []));
   if (want.length === 0) { msg(coolantWho() + "unknown coolant ask " + ask); return ""; }
   var cs = (typeof machine !== "undefined" && machine.coolants) || [];
   for (var i = 0; i < cs.length; i++) {
@@ -300,7 +308,7 @@ function onPartUnloading() { flushPass(); note("PART UNLOAD"); }
 // blending gets an explicit tolerance: a bare G64 is "no tolerance" in
 // plain LinuxCNC (0.001 in, or its 0.025 mm twin).
 function onOpen() {
-  inch = typeof machine !== "undefined" && machine.units === "inch";
+  inch = typeof postOptions !== "undefined" && postOptions.Units === "inch";
   var nm = (typeof machine !== "undefined" && machine.name) || "CAMCRAFT";
   note(clean(nm));
   block(["G7", "G18", inch ? "G20" : "G21", "G90", "G91.1", "G40", "G95"]);
@@ -326,6 +334,7 @@ function onParameter(name, value) {
   else if (name === "OriginY" && has(value)) orgY = Number(value);
   else if (name === "OriginZ" && has(value)) orgZ = Number(value);
   else if (name === "SurfaceSpeed" && has(value)) sCss = Number(value);
+  else if (name === "MaxSpindleSpeed" && has(value)) sMax = Number(value);
   else if (name === "SpindleDirection") spinRev = String(value || "") === "reverse";
 }
 
@@ -350,6 +359,17 @@ function onToolChange(number, name) {
   }
 }
 
+// The rpm ceiling a G96 section runs under (#891): the lower of the
+// machine's stated spindle maximum and the tool's own (PARAM
+// MaxSpindleSpeed); 0 when neither is stated - and then no G96 posts.
+function cssCap() {
+  var mm = (typeof machine !== "undefined" && machine.spindleMax > 0) ? machine.spindleMax : 0;
+  var tm = sMax > 0 ? sMax : 0;
+  if (mm > 0 && tm > 0) return Math.min(mm, tm);
+  return mm > 0 ? mm : tm;
+}
+var UNCLAMPED = "constant surface speed (G96) with no rpm clamp - the machine states no spindle maximum and the tool no max rpm; an unclamped G96 runs away toward the centre";
+
 // The preamble closes over everything a raw motion line needs to be a
 // legal program: offset, tool + offsets, spindle, coolant.
 function startPreamble() {
@@ -367,9 +387,10 @@ function startPreamble() {
     var m = spinRev ? "M4" : "M3";
     if (spinRev) note("SPINDLE M4 - THREAD HAND NEEDS REVERSE ROTATION - MOUNT THE INSERT FOR M4");
     if (sCss > 0) {
-      var cap = (typeof machine !== "undefined" && machine.spindleMax > 0) ? "D" + ff(machine.spindleMax) : "";
+      var cap = cssCap();                              // machine and tool ceilings (#891)
       var css = inch ? sCss / 0.3048 : sCss;          // m/min -> ft/min under G20
-      block(["G96", cap, "S" + ff(css), m]);
+      if (!(cap > 0)) refuse(UNCLAMPED);
+      else { block(["G96", "D" + ff(cap), "S" + ff(css), m]); cssOn = true; }
     } else {
       block(["G97", "S" + ff(sRpm), m]);
     }
@@ -404,8 +425,11 @@ function endPreamble() {
   coolant = "";
   coolantAsk = "flood";
   block(["M5"]);
+  if (cssOn) block(["G97"]); // #1173: no section opens under a G96 it did not state
+  cssOn = false;
   spinRev = false;           // the next section states its own
   sCss = 0;                  // and its own spindle mode: no stale G96 (#772)
+  sMax = 0;                  // and its own clamp (#891)
   afterOp();
 }
 

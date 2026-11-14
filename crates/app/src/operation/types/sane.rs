@@ -6,6 +6,20 @@ use crate::operation::types::params::OpParams;
 use crate::operation::types::sel::lead_sane;
 
 impl OpParams {
+    /// The by-name refusal behind a failed [`Self::is_sane`], where a
+    /// kind can say it (#546: the sinker burn's wear rate and layer
+    /// step; the side burn's structural refusal, which names a wear rate
+    /// or layer step it does not support yet); `None` keeps the
+    /// commands' generic "not usable".
+    #[must_use]
+    pub fn named_refusal(&self) -> Option<String> {
+        match self {
+            OpParams::SinkerBurn(p) => p.compensation_refusal(),
+            OpParams::SinkerSideBurn(p) => p.refusal(),
+            _ => None,
+        }
+    }
+
     /// Shallow sanity for command construction, no world: finite numbers,
     /// positive increments, in-range slots. Ordering needs resolved
     /// heights and runs in [`crate::operation::depth_sane`] wherever a command holds the
@@ -35,6 +49,13 @@ impl OpParams {
             && match self {
             // The plasma door (#670): the parameter set's own sanity.
             OpParams::PlasmaProfile(p) => p.is_sane(),
+            // The wire door (#532): the parameter set's own sanity; the
+            // condition is the command door's world question.
+            OpParams::WireContour(p) => p.is_sane(),
+            // The sinker door (#541): the parameter set's own sanity.
+            OpParams::SinkerBurn(p) => p.is_sane(),
+            // #545: the side burn's own door.
+            OpParams::SinkerSideBurn(p) => p.is_sane(),
             // The probe's door (#108): every distance and feed a real
             // number, the measure no faster than the seek, the back-off
             // inside the approach, a slot G54..G59 when one is named.
@@ -343,6 +364,7 @@ impl OpParams {
                 ramp_angle,
                 steep_stepover,
                 pencil_reference,
+                fill_openings,
                 ..
             } => {
                 // No stepdown to check: the scallop law derives it from
@@ -359,6 +381,9 @@ impl OpParams {
                     // (which bigger is whose law is the kernel's to
                     // refuse by name; sanity only asks for a number).
                     && pencil_reference.is_none_or(pos)
+                    // #1196: the land width is a diameter - finite
+                    // and positive, or absent (no land model).
+                    && fill_openings.is_none_or(pos)
                     && clearance_z.is_sane()
                     && retract_z.is_none_or(|r| r.is_sane())
                     && top_z.is_sane()
@@ -940,6 +965,7 @@ impl OpParams {
                 infeed,
                 feed,
                 plunge_feed,
+                infeed_plan,
                 hand: _,
             } => {
                 pos(*tolerance)
@@ -951,6 +977,11 @@ impl OpParams {
                     && pos(*infeed)
                     && pos(*feed)
                     && pos(*plunge_feed)
+                    // The plan's tool-free numbers (#416); whether the
+                    // flank angle fits the insert is the tool's
+                    // question, asked by name at the threading gate.
+                    && infeed_plan.is_sane()
+                    && infeed_plan.refusal(*depth, *infeed, 180.0).is_none()
             }
             // The contour doors (M5.2 stage E): the twins' heights and
             // feeds, plus each kind's own promise-number, finite.
@@ -1103,12 +1134,18 @@ impl OpParams {
                 feed,
                 plunge_feed,
                 holes,
+                pitch,
+                passes,
                 ..
             } => {
                 clearance_z.is_sane()
                     && retract_z.is_none_or(|r| r.is_sane())
                     && top_z.is_sane()
                     && bottom_z.is_none_or(|b| b.is_sane())
+                    && pitch.is_none_or(pos)
+                    // #988: signs are judged by name at the door.
+                    && passes.finish.is_finite()
+                    && passes.allowance.is_finite()
                     && pos(*infeed)
                     && pos(*feed)
                     && pos(*plunge_feed)

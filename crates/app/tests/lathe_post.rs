@@ -16,7 +16,7 @@
 //! `lathe_post_refusals.rs`.
 //!
 //! Gate map (M4.4): covers app::posting (stream_records, post_serves,
-//! default_post_for, the registry), app::post (engine on the lathe
+//! default_post_for, the registry), post::post (engine on the lathe
 //! dialect), app::commands (SelectPost by name on a lathe document).
 //! Lane shape (M4.4): all tests here run in seconds.
 
@@ -109,6 +109,7 @@ fn bar_world(meridian: &[(f64, f64)], tools: &[&str]) -> (World, History) {
     history.execute(&world, cmd.expect("bar stock"));
     let cmd = LoadMachine::new(&world, "lathe.mch".into(), Some(lathe()));
     history.execute(&world, cmd.expect("lathe"));
+    history.execute(&world, camcraft_app::commands::SelectPost::new(&world, camcraft_app::schema::PostRef::Named("Fanuc Lathe".into())).expect("lathe post"));
     for t in tools {
         add_tool(&world, &mut history, t);
     }

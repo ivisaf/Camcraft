@@ -1,3 +1,185 @@
+# CamCraft 0.19.0 (clean-room implementation)
+
+Released 2026-11-13.
+
+## Breaking
+- **The document's unit is the unit every post writes** (#902, PR #981).
+  Posted programs are in the document's mm or inch (G21/G20, Siemens 840D
+  G710/G700), never the machine file's unit. The grblHAL and TinyG posts follow
+  it; the Carvera, Heidenhain and Fanuc Lathe posts refuse an inch document by
+  name. Older projects open on the unit they posted in. MCP gains `set_units`.
+  Check the first program you post on each machine.
+- **Thread milling is reworked** (#894, PR #1005). Thread mills are tool kinds
+  (multi-form and single-form), and the Thread operation cuts internal threads
+  by helical interpolation (radial passes, climb or conventional, right or left
+  hand) and posts G2/G3 with Z. A Thread operation no longer accepts a Tap-kind
+  tool, so projects that used one need a thread mill.
+- **Air coolant and machine default coolant** (#869, PR #961). An operation can
+  ask for Air (M7 air blast), resolved from the machine's coolant list or
+  refused by name. A new operation starts on its machine's default coolant (Air
+  on the Carvera), and the Carvera post posts the operation's own coolant
+  instead of the first Flood entry. The machine editor adds coolants with their
+  codes and no longer saves a coolant without one.
+- **Project file format is v59** (#1056, PR #1341). Projects saved before mesh
+  fidelity was recorded (v58 or older) open with every model marked "fidelity
+  unknown", and their operations are refused by name until the model is
+  re-imported. Files saved by 0.19.0 do not open in 0.18.0.
+
+A minor release headlined by **wire EDM and sinker EDM**, **more turning**
+(threading infeed, workholding rpm limits, lathe holder bodies), **new posts**
+(grblHAL, TinyG, generic ISO wire and sinker EDM), **a much larger MCP surface**
+and **stricter verification** of imported STEP models. 237 pull requests merged
+since 0.18.0.
+
+## Highlights
+### Wire EDM
+- Machine files can declare `wire_edm` and `sinker_edm` machines with an `edm`
+  section and an EDM condition table; a program whose operation its setup's
+  machine cannot run is refused at post (#530, #560).
+- 2-axis Wire Contour: kerf offset to a stated punch or die side, start hole,
+  corner refusal, open runs cut in from the stock's edge, tabs with a tab
+  cut-off (an unheld slug is refused), no-core burnout by offset rings, and
+  constant taper with posed moves and max-angle and U/V refusals.
+- Wire verification: kerf, threading and slug laws block the post.
+- A tool-less Wire Contour page and machine section in the UI.
+
+### Sinker EDM
+- Sinker burn to depth with one electrode, rough and finish with undersize from
+  their conditions, orbit patterns (circular, vector, planetary), side burn,
+  electrode wear compensation in Z, and an electrode generated from a cavity's
+  picked faces (`electrode_from_faces`).
+
+### Turning
+- Threading infeed method with a decreasing-depth pass schedule (#516).
+- A setup's workholding max rpm caps G96 and refuses G97 above it.
+- The index swing of any work-turning rotary is judged about a level line, and
+  a rotary subplate raises the A centerline.
+- Lathe holder bodies can be placed from the tool editor and over MCP, are read
+  on their own side of the axis, and are judged against chuck jaws and standing
+  steel. The simulation draws the turning tool's lathe body.
+
+### Milling, threads and finishing
+- External threads on a boss at the operation level, and thread-milling pass
+  control (decreasing passes, finish and spring passes, depth allowance).
+- Finish 3D gains a land model that fills closed openings on the drive surface.
+- Part alignment from two perpendicular edge picks (full 3D frame), the WCS from
+  any set of feature picks, and the WCS anchored on a picked circle's centre.
+- Tools carry part number, vendor, coating, helix angle, notes and cutting data
+  per work material; the setup sheet tool list prints them. Tool library import
+  has add, update and replace modes, and `.camtools` carries the tool body.
+- A self-centering grip vise jaw, and editing and re-fitting a placed mod vise
+  pair.
+
+### Posts
+- New posts: grblHAL (3-axis mill), Synthetos TinyG (3-axis mill), generic ISO
+  wire EDM and generic ISO sinker EDM (every EDM code is machine data). Sienci
+  AltMill machines run on the grblHAL post.
+- Fanuc Lathe writes inch programs; the document's program number and comment
+  are written per dialect. A user's post script states the machine kinds it
+  serves. Rigid tapping is refused by name at the program gate when the machine
+  does not state it.
+- An opt-in **Explain G-code** option writes plain-English comments on blocks
+  for posts that declare a comment form; other posts are refused by name.
+
+### MCP tools
+`set_tool_holder`, `list_holder_library`, `rename_operation`,
+`reorder_operation`, `set_operation_coolant`, `set_setup_post`, `edit_machine`,
+`edit_tool`, `set_wcs_from_features`, `set_wcs_circle_centre`, `lay_part_on_face`,
+`set_tool_number`, `set_work_material`, `apply_cutting_data`, `delete_tool`,
+`set_operation_setup`, `delete_setup`, `electrode_from_faces`, `set_units`, and
+`add_operation` for the Wire Contour with no tool. `pick_in_box` takes a
+`through` argument. The skill documents every registered tool.
+
+### Verification and collision
+- A STEP model imported coarser than 0.005 mm is flagged as reduced fidelity:
+  gouge checks are tightened by the excess and its operations are refused at the
+  post once it is too coarse. The facet budget is a setting carried with the
+  import. A STEP import can go through solidcore behind a seam, and a machining
+  mesh with a measured deviation is available from it.
+- A from-model stock's source is judged unless marked raw stock only. The rapid
+  law reads the stock under the rapid, and the mid-turn sweeps read the whole
+  turn rather than five poses.
+- Refusal ghosts show where a part-way refusal stopped.
+
+### UI
+- The Setups page lists setups only; alignment, work offset, workholding and
+  tools live on the setup. A viewport bottom control bar holds the view buttons,
+  and a "Pick through" toggle lets picks reach the far side.
+- The G-code window has syntax colour, selectable text, a highlighted trace line
+  and click-to-trace. Error text is selectable and copyable everywhere.
+- Original SVG operation icons, tool kind glyphs and status badges, with an
+  SVG-to-PNG icon pipeline. The tool editor edits each milling tool kind by its
+  parameters. Viewport origin gizmos wear their names.
+- The browser (wasm32) build is published under `/app/` on the project site.
+
+## Fixes
+91 fixes landed; the ones most likely to matter when posting:
+- Posts: canned-cycle posts traverse between holes at the stream's hop and seat
+  an off-seat cycle by the same law; Sinumerik writes work offsets 5 and 6 as
+  G505 and G506; an absent rotary takes no angle word; lathe posts state G97
+  before a section that is not constant surface speed; a milling operation is
+  never posted on a lathe's work spindle; a cut with the spindle stopped, or a
+  canned cycle with no feed, is refused in every spindle mill dialect; a touch
+  probe section starts no coolant; a post that does not serve its setup's machine
+  kind is refused by name; the sinker ISO post writes the document's unit.
+- Rotary and A-axis: posts cap the feed of a block that turns a rotary at the
+  machine's stated rotary rate and linear feed (Fanuc, Doosan DNM, Fanuc Lathe;
+  #885), and the Doosan DNM post writes the first A word of every operation, so
+  an A0 operation after a tilted one no longer cuts at the old angle (#950).
+- Swarf: the mid-turn sweep no longer refuses a blade-lying link that turns B
+  through vertical (#1404).
+- Verification: a tool cutting into a flat is a gouge; a necked tool is judged at
+  its drawn neck; non-finite or zero tool axes are refused; crossing checks read
+  a shared vertex a rounding apart as a touch; the hole-wall excuse and tilted
+  band laws were corrected.
+- Import and project: a STEP record nested past 64 parentheses is refused by name
+  instead of overflowing the stack; STEP parse errors name the entity and line;
+  opening a project over MCP replaces the document.
+- Adaptive roughing no longer drops a level to Offset rings because the entry
+  orbit's closing point sat a rounding error off its start (#980).
+- UI: no console window on a Windows double-click, native dialogs are owned by
+  the shell window, and the plasma refusal reads plainly.
+
+## Not exercised on a real control
+These were checked by simulation, recorded streams and tests only, not on a
+machine or a vendor control:
+- The generic ISO wire EDM post and the generic ISO sinker EDM post are
+  synthetic: their codes are machine data, not taken from a real control.
+- Wire taper, tabs, no-core burnout and 4-axis wire as merged, and the sinker
+  orbit, side burn and wear compensation moves.
+- The turning thread infeed plan (#516).
+- The rotary feed cap (#885) and the Doosan DNM A-state change (#950) merged
+  without a PathPilot Hub run or a real Doosan control.
+- The grblHAL and TinyG posts, and the Sienci AltMill machine files.
+- Thread milling by helical interpolation was verified in simulation only.
+
+## Process changes
+Contributor and agent process only; no effect on the program. PROCESS_VERSION
+went from 16 to 54 (numbers 23 and 27 were not announced):
+- **17** (#1117): the `gh-issues` skill is in the repo.
+- **18, 20, 22, 25, 28, 34, 35, 40, 41, 43-53**: camcraft-mcp skill rows for new
+  MCP tools and arguments.
+- **19, 21, 33, 37, 38, 42**: xtask gate maps and the quick gate follow moved
+  modules, changed post scripts and machine files, `#[path]` files, and the
+  motion generator; probe and arc post suites and twelve other test files moved
+  into the crates that own them.
+- **24, 26** (#1116, #1179): `cargo xtask icons` rasterises the SVG masters.
+- **29** (#1193): the priority scale is `P1`..`P9`.
+- **30** (#1214): the gate reports VOID when the checkout moves during a run.
+- **31, 32** (#1227, #1321): refresh only at merge time; any collaborator's
+  review counts and both may merge.
+- **36, 39** (#991, #1225): code placement rules (`app` holds the document, new
+  crate dependencies need a decision) and `crates/ui/AGENTS.md`.
+- **54** (#1391): the cut ends once the Pages job is green and the site shows the
+  new version.
+
+## Known issues
+- The browser build is a first rung; the file picker is still owed.
+- No installer is built on the cut machine; the zip is the release and the
+  published artifact is built by the release workflow from the tag.
+
+---
+
 # CamCraft 0.18.0 (clean-room implementation)
 
 Released 2026-11-12.

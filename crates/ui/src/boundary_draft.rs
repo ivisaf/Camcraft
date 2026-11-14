@@ -321,7 +321,7 @@ pub fn extend(state: &mut State, at: EntryRef) -> Result<(), String> {
 /// How a viewport click reads while the group collects.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PickMods {
-    /// Ctrl: toggle the pick in or out of the entry.
+    /// Command (Cmd on macOS, Ctrl elsewhere): toggle the pick in or out of the entry.
     pub toggle: bool,
     /// Shift: add it and close the entry around its face loop.
     pub close: bool,

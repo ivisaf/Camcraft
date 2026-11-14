@@ -246,6 +246,8 @@ pub fn fold_warnings_located(warnings: &[Warning]) -> Vec<(String, Option<usize>
             Warning::Scallop { .. } => (211, false),
             // A probe's deep search limit (#570): advisory, its own line.
             Warning::ProbeSearch { .. } => (214, false),
+            // A sinker finish out of order (#543): advisory, its own line.
+            Warning::SinkerFinishOrder { .. } => (215, false),
             // A lathe holder's rub (#369) splits part from stock too.
             Warning::HolderHit { part, .. } => (212 + *part as u8, false),
         }
@@ -263,7 +265,8 @@ pub fn fold_warnings_located(warnings: &[Warning]) -> Vec<(String, Option<usize>
             | Warning::Envelope { at, .. }
             | Warning::RestUnjudged { at, .. }
             | Warning::Scallop { at, .. }
-            | Warning::ProbeSearch { at, .. } => *at,
+            | Warning::ProbeSearch { at, .. }
+            | Warning::SinkerFinishOrder { at, .. } => *at,
         }
     }
     let mut lines: Vec<(String, Option<usize>)> = Vec::new();

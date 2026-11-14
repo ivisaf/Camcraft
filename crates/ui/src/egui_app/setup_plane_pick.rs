@@ -1,6 +1,6 @@
 //! The Setups page's "Lay on a plane" row (#330): pick one flat face in
 //! the viewport (#554: a face only - an edge cannot set a plane; edges
-//! set an axis in the "Axes in the plane" rows), choose G17 (XY), G18
+//! set an axis in the "Part axes" rows), choose G17 (XY), G18
 //! (ZX) or G19 (YZ), lay the face down on it (the default, #606) or up,
 //! optionally set the face onto the plane's level, and Apply. The pick draft is view state (`crate::plane_pick`); Apply queues
 //! `CommandKind::LayPartOnPlane`, the undoable `AlignPartToSetup`. The

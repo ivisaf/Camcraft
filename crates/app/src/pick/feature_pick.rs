@@ -161,7 +161,7 @@ fn along(o: [f64; 3], d: [f64; 3], t: f64) -> [f64; 3] {
     [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t]
 }
 
-fn world_of(b: &PickBody, p: [f64; 3]) -> [f64; 3] {
+pub(super) fn world_of(b: &PickBody, p: [f64; 3]) -> [f64; 3] {
     a3(transform_point(p3(p), b.pose.pos, b.pose.rot))
 }
 
@@ -187,7 +187,7 @@ fn segment_near_ray(o: [f64; 3], d: [f64; 3], a: [f64; 3], b: [f64; 3]) -> [f64;
 
 /// Does any occluding facet cross the sight segment from `p` (world)
 /// back to the viewer before reaching `p`?
-fn occluded(bodies: &[PickBody], own: usize, ray: &PickRay, d: [f64; 3], p: [f64; 3]) -> bool {
+pub(super) fn occluded(bodies: &[PickBody], own: usize, ray: &PickRay, d: [f64; 3], p: [f64; 3]) -> bool {
     let eye = match ray.projection {
         Projection::Perspective => ray.origin,
         Projection::Ortho => along(p, d, -dot(sub(p, ray.origin), d)),

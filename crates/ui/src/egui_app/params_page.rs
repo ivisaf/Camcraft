@@ -182,6 +182,8 @@ pub(super) fn params_fields(ui: &mut Ui, state: &mut State, tab: usize) {
     super::holes_page::fields(ui, world, params, &mut cx);
     super::probe_page::fields(ui, world, params, &mut cx);
     super::plasma_page::fields(ui, world, params, &mut cx);
+    super::wire_page::fields(ui, world, params, &mut cx);
+    super::sinker_page::fields(ui, world, params, &mut cx);
     super::trochoid_page::fields(ui, world, params, &mut cx);
     super::mill3d_page::fields(ui, world, params, &mut cx);
     super::multiaxis_page::fields(ui, world, params, &mut cx);

@@ -23,6 +23,7 @@ use super::*;
 use super::boundary::{Family, OpenGeom, pick_side_left};
 use super::boundary_turn::sides_of_chain;
 use crate::machining2d::{ContourParams, contour_along_chain};
+use crate::units::Unit;
 
 /// Points closer than this (mm) are one point.
 const SAME: f64 = 1e-9;
@@ -125,7 +126,7 @@ pub(super) fn open_run(base: &Region, ctx: &AreaCtx, stock_to_leave: f64) -> Res
         d = -d;
     }
     let ext = extended(&chain, c.extension);
-    let run = if d < TOL { ext } else { offset_run(&ext, d, tool_left)? };
+    let run = if d < TOL { ext } else { offset_run(&ext, d, tool_left, ctx.unit)? };
     Ok((run, d))
 }
 
@@ -233,10 +234,13 @@ fn extended_ends(p: &[Point2], e0: f64, e1: f64) -> Vec<Point2> {
 /// The chosen side of the chain's offset at `d`: the boundary of the
 /// disc swept along it, minus its round end caps, travelled with the
 /// chain on its left (the contour's canonical climb travel).
-fn offset_run(ext: &[Point2], d: f64, left: bool) -> Result<Vec<Point2>, GenError> {
+fn offset_run(ext: &[Point2], d: f64, left: bool, unit: Unit) -> Result<Vec<Point2>, GenError> {
     let folds = || {
         GenError::Invalid(format!(
-            "the open boundary's offset of {d:.3} mm folds onto itself (the chain comes back within twice the offset of itself) - pick a gentler chain or a smaller tool / offset"
+            "the open boundary's offset of {} {} folds onto itself (the chain comes back within twice \
+             the offset of itself) - pick a gentler chain or a smaller tool / offset",
+            crate::units::len(d, unit, 3),
+            unit.suffix()
         ))
     };
     let tube = Region::sweep(&[ext.to_vec()], d)?;
@@ -295,10 +299,10 @@ mod tests {
     #[test]
     fn the_right_side_of_a_straight_chain_runs_with_it() {
         let ext = vec![Point2::new(0.0, 0.0), Point2::new(10.0, 0.0)];
-        let run = offset_run(&ext, 2.0, false).expect("run");
+        let run = offset_run(&ext, 2.0, false, Unit::Millimeters).expect("run");
         assert!(run.iter().all(|q| (q.y + 2.0).abs() < 1e-3), "{run:?}");
         assert!((run[0].x - 0.0).abs() < 1e-9 && (run[run.len() - 1].x - 10.0).abs() < 1e-9);
-        let run = offset_run(&ext, 2.0, true).expect("run");
+        let run = offset_run(&ext, 2.0, true, Unit::Millimeters).expect("run");
         assert!(run.iter().all(|q| (q.y - 2.0).abs() < 1e-3), "{run:?}");
         assert!(run[0].x > run[run.len() - 1].x, "the left side runs against the chain");
     }
@@ -310,7 +314,7 @@ mod tests {
         // A hairpin 1 mm wide offset by 2 mm folds.
         let u = vec![Point2::new(0.0, 0.0), Point2::new(20.0, 0.0), Point2::new(20.0, 1.0), Point2::new(0.0, 1.0)];
         assert!(!crosses_itself(&u));
-        assert!(offset_run(&u, 2.0, true).is_err() || offset_run(&u, 2.0, false).is_err());
+        assert!(offset_run(&u, 2.0, true, Unit::Millimeters).is_err() || offset_run(&u, 2.0, false, Unit::Millimeters).is_err());
         assert!(normalized(&[Point2::new(1.0, 1.0), Point2::new(1.0, 1.0)]).is_err());
     }
 }

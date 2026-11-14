@@ -1,3 +1,4 @@
+(synthetic program, posted for syntax conformance)
 %
 O0001 (VMC 3-AXIS)
 G21

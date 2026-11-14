@@ -7,9 +7,11 @@
 //! (undo / redo) and the project file.
 //! Provenance: our own tests over our own post, command and file.
 //!
-//! Gate map (M4.4): covers app::post (tormach.cps), app::posting
+//! Gate map (M4.4): covers post::post (tormach.cps), app::posting
 //! (options_value), app::commands (SetPostOptions), app::project
 //! (post_options end_units), app::schema (EndUnits).
+
+mod common;
 
 use camcraft_app::commands::{History, SetPostOptions};
 use camcraft_app::machine::parse_mch;
@@ -39,15 +41,26 @@ fn machine_for(mch: &str) -> serde_json::Value {
 /// Post one golden stream through tormach.cps with the given end units.
 fn post(mch: &str, golden: &str, end: Option<EndUnits>) -> String {
     let cps = read("assets/posts/tormach.cps");
-    let stream = read(&format!("crates/app/tests/golden/{golden}.cl"));
+    // #1357: a real program (tool, spindle, cycle feed) - the bare
+    // stream is refused by name now.
+    let stream = common::legacy_program::as_program(golden, &read(&format!("crates/app/tests/golden/{golden}.cl")));
     let m = machine_for(mch);
+    // #902: the program's unit is the document's - the inch machine's
+    // runs here stand for an inch document, as before #902 they posted.
+    let unit = |mut o: serde_json::Value| {
+        if mch == INCH_MCH {
+            o["Units"] = serde_json::json!("inch");
+        }
+        o
+    };
     let out = match end {
+        None if mch == INCH_MCH => engine::run_with(&cps, &m, &stream, &unit(serde_json::json!({}))),
         None => engine::run(&cps, &m, &stream),
         Some(e) => engine::run_with(
             &cps,
             &m,
             &stream,
-            &posting::options_value(PostOptions { end_units: e, ..PostOptions::default() }),
+            &unit(posting::options_value(PostOptions { end_units: e, ..PostOptions::default() })),
         ),
     }
     .unwrap_or_else(|e| panic!("{golden}: {e}"));

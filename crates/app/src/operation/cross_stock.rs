@@ -24,6 +24,7 @@ use crate::drilling::CrossHole;
 use crate::geometry::{Point3, Triangle};
 use crate::machining2d::GenError;
 use crate::tools::Tool;
+use crate::units::{self, Unit};
 
 use super::cross_entry::{Line, StockMesh, entry};
 
@@ -136,6 +137,7 @@ pub(super) fn to_raw_mouths(
     st: &Standoff,
     raw: f64,
     tool: &Tool,
+    unit: Unit,
 ) -> Result<(Vec<CrossHole>, Vec<f64>), GenError> {
     let (d, rim) = (tool.diameter, body_rim(tool));
     let mouths: Vec<CrossHole> = holes
@@ -147,9 +149,11 @@ pub(super) fn to_raw_mouths(
             if c * dc > 0.0 {
                 return Err(GenError::invalid_at(
                     format!(
-                        "cross hole at ({:.3}, {:.3}, {:.3}) plunges away from the spindle - a cross \
+                        "cross hole at ({}, {}, {}) plunges away from the spindle - a cross \
                          drill feeds toward the bar's axis; flip the hole's direction",
-                        h.origin.x, h.origin.y, h.origin.z
+                        units::len(h.origin.x, unit, 3),
+                        units::len(h.origin.y, unit, 3),
+                        units::len(h.origin.z, unit, 3)
                     ),
                     h.origin,
                 ));
@@ -246,7 +250,7 @@ fn slab_approach(a: Point3, b: Point3, axis: [f64; 3], w: f64) -> f64 {
 /// behind the flutes, a wider shank's - outside the raw stock when
 /// there is one; every other rapid keeps the body's rim outside
 /// `st.r`. Anything else is a rapid through material, refused by name.
-pub(super) fn rapids_clear(t: &Toolpath, st: &Standoff, tool: &Tool) -> Result<(), GenError> {
+pub(super) fn rapids_clear(t: &Toolpath, st: &Standoff, tool: &Tool, unit: Unit) -> Result<(), GenError> {
     let tol = 1e-6;
     let (d, rim) = (tool.diameter, body_rim(tool));
     let mut kerf: Option<(Point3, [f64; 3])> = None;
@@ -282,9 +286,13 @@ pub(super) fn rapids_clear(t: &Toolpath, st: &Standoff, tool: &Tool) -> Result<(
                 let Some((got, need)) = short else { continue };
                 if got.is_nan() || got < need - tol {
                     return Err(GenError::Invalid(format!(
-                        "cross-drill rapid {i} stops {got:.3} mm out along its hole's line, inside where \
-                         the tool body meets the stock ({need:.3} mm) - a rapid through material; raise \
-                         the clearance or retract height, or turn the bar to size first"
+                        "cross-drill rapid {i} stops {} {} out along its hole's line, inside where \
+                         the tool body meets the stock ({}, {}) - a rapid through material; raise \
+                         the clearance or retract height, or turn the bar to size first",
+                        units::len(got, unit, 3),
+                        unit.suffix(),
+                        units::len(need, unit, 3),
+                        unit.suffix()
                     )));
                 }
                 continue;
@@ -301,9 +309,13 @@ pub(super) fn rapids_clear(t: &Toolpath, st: &Standoff, tool: &Tool) -> Result<(
         };
         if got.is_nan() || got < need - tol {
             return Err(GenError::Invalid(format!(
-                "cross-drill rapid {i} passes {got:.3} mm from the spindle, inside the stock's \
-                 {what} ({need:.3} mm) - a rapid through material; raise the clearance or \
-                 retract height, or turn the bar to size first"
+                "cross-drill rapid {i} passes {} {} from the spindle, inside the stock's \
+                 {what} ({}, {}) - a rapid through material; raise the clearance or \
+                 retract height, or turn the bar to size first",
+                units::len(got, unit, 3),
+                unit.suffix(),
+                units::len(need, unit, 3),
+                unit.suffix()
             )));
         }
     }

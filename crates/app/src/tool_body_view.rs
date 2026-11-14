@@ -55,11 +55,8 @@ pub struct LoadedBody {
 /// model-frame facets, and automatic placement from ISO 13399 coordinate
 /// systems (#370) if present.
 pub fn load_aligned(path: &Path) -> Result<LoadedBody, String> {
-    let mesh = crate::geometry::import::load_model(path).map_err(|e| e.to_string())?;
-    if mesh.facets.is_empty() {
-        return Err("the file holds no facets".into());
-    }
-    let source = path.file_name().map_or_else(|| path.display().to_string(), |f| f.to_string_lossy().into_owned());
+    // #361: the one body-file door (a reduced-fidelity mesh is refused).
+    let crate::tool_body_file::BodyFile { source, facets } = crate::tool_body_file::read(path)?;
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
     let alignment = if ext == "step" || ext == "stp" {
         match std::fs::read(path) {
@@ -72,7 +69,7 @@ pub fn load_aligned(path: &Path) -> Result<LoadedBody, String> {
     } else {
         Err("not a STEP file (no coordinate systems)".into())
     };
-    Ok(LoadedBody { source, facets: mesh.facets.to_vec(), alignment })
+    Ok(LoadedBody { source, facets, alignment })
 }
 
 /// Read a STEP / STL / OBJ for a tool body: its file name and its

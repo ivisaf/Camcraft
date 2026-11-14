@@ -24,8 +24,9 @@ cargo xtask gate quick --dry-run       # print the plan, run nothing
 ```
 
 Logs go to `gate-logs/<tier>-<timestamp>/`. The scripts
-`scripts/gate.ps1` and `scripts/gate.sh` are thin wrappers that forward to
-`cargo xtask gate`.
+`scripts/gate.ps1` (PowerShell) and `scripts/gate.sh` (bash) are thin
+wrappers that forward to `cargo xtask gate`. The `cargo xtask gate` command
+itself is the same on Windows, macOS and Linux.
 
 ## Test the change, not everything
 

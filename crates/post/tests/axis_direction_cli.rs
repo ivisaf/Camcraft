@@ -44,7 +44,8 @@ fn run(tag: &str, parts: &str, cps: &str, stream: &str) -> (bool, String, Option
     (r.status.success(), String::from_utf8_lossy(&r.stderr).to_string(), written)
 }
 
-const STREAM: &str = "Rapid 10000 5000 2000\nFeed 20000 5000 0 F500000\n";
+// #1359: the fanuc post refuses a cut with the spindle stopped.
+const STREAM: &str = "PARAM SpindleSpeed 6000\nRapid 10000 5000 2000\nFeed 20000 5000 0 F500000\n";
 
 #[test]
 fn the_cli_posts_an_inverted_x_mirrored() {

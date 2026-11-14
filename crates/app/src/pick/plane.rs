@@ -143,7 +143,7 @@ fn datum_of(world: &World, picks: &[GeoSel]) -> Result<Datum, String> {
             FeatureSel::Chain(_) => {
                 return Err(format!(
                     "{} of '{}' is an edge - an edge cannot set a plane; pick a flat face \
-                     (edges set an axis: Axes in the plane)",
+                     (edges set an axis: Part axes)",
                     g.feature, g.entity
                 ));
             }

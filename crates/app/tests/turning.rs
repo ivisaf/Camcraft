@@ -13,7 +13,7 @@
 //! (camcraft-motion's turning suite); this file is the wiring.
 //!
 //! Gate map (M4.4): covers camcraft_app::commands (family gate,
-//! CreateOperation/GenerateOperation), camcraft_app::machine (kind
+//! CreateOperation/GenerateOperation), camcraft_app::machine, post::machine (kind
 //! read), camcraft_app::operation (the Facing arm of
 //! generate/heights/material, the seed), camcraft_app::posting-free
 //! generation path.
@@ -150,6 +150,9 @@ fn the_family_door_names_both_sides() {
     let msg = err.to_string();
     assert!(msg.contains("turning") && msg.contains("lathe"), "{msg}");
     assert!(msg.contains("Facing"), "{msg}");
+    // #1291: no machine is mounted, so the words say so - never "a mill".
+    assert!(msg.contains("the setup has no machine mounted - mount a lathe (or a mill-turn) first"), "{msg}");
+    assert!(!msg.contains("is a mill"), "{msg}");
     assert!(model::find_by_name(&world, "F1").is_none(), "a refusal creates nothing");
     // The lathe mount opens it - through the command, so the history
     // owns the change and undo shuts the door again.
@@ -315,4 +318,19 @@ fn facing_refuses_a_mill_tool_by_name() {
     };
     let msg = err.to_string();
     assert!(msg.contains("turning insert") && msg.contains("EM-0400-2FL"), "{msg}");
+}
+
+#[test]
+fn a_mounted_mill_refusal_names_the_mill() {
+    // #1291: the mill case keeps its wording - the mounted machine is
+    // named, and the mount that opens the door is the same as before.
+    let (world, mut history) = bar_world();
+    mount(&world, &mut history, "mill");
+    let Err(err) =
+        CreateOperation::new(&world, "F1", "TN-1600-0R8", SrcRef::Entity("bar".into()), facing_params(14.0))
+    else {
+        panic!("a turning op on a mounted mill must refuse");
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("the setup's machine is a mill - mount a lathe (or a mill-turn) first"), "{msg}");
 }

@@ -1,3 +1,4 @@
+(synthetic program, posted for syntax conformance)
 %
 (VMC 3-AXIS)
 G21

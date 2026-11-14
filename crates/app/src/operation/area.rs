@@ -18,6 +18,7 @@
 //! runs on it - nothing here looks at the region's shape.
 
 use super::*;
+use crate::units::{self, Unit};
 
 /// The seam itself (M11.4 A / M11.5): every region an operation cuts -
 /// selection-built or source-built, Face included, and the Contour
@@ -87,6 +88,7 @@ pub(super) fn pocket_region_on_part(
     loops: Vec<Loop>,
     part: &[Triangle],
     planes: &[f64],
+    unit: Unit,
 ) -> Result<Region, GenError> {
     let mut enclosed = Region::empty();
     for l in &loops {
@@ -97,7 +99,8 @@ pub(super) fn pocket_region_on_part(
     }
     let full = |z: f64| {
         format!(
-            "the part fills the whole selection at Z {z:.3} - Bottom Z sits below the selected pocket's floor; raise Bottom Z to the floor"
+            "the part fills the whole selection at Z {} - Bottom Z sits below the selected pocket's floor; raise Bottom Z to the floor",
+            units::len(z, unit, 3)
         )
     };
     match minus_standing(&enclosed, part, planes, full)? {
@@ -176,13 +179,13 @@ pub(super) fn whole_model_pocket(
         Some(f) => (f.local_facets(&part), f.local_facets(&stock)),
         None => (part, stock),
     };
-    Some(around_part(&part, &stock, &ladder_planes(t - oz, b - oz, stepdown)))
+    Some(around_part(&part, &stock, &ladder_planes(t - oz, b - oz, stepdown), crate::units::of(world)))
 }
 
 /// [`whole_model_pocket`]'s pure law: the stock's silhouette minus the
 /// part standing at `planes`. A part that covers the whole stock at a
 /// plane leaves nothing to clear around it - refused by name.
-pub(super) fn around_part(part: &[Triangle], stock: &[Triangle], planes: &[f64]) -> Result<Region, GenError> {
+pub(super) fn around_part(part: &[Triangle], stock: &[Triangle], planes: &[f64], unit: Unit) -> Result<Region, GenError> {
     let enclosed = slice::project(stock, FOOTPRINT_SAMPLES).map_err(from_slice)?;
     if enclosed.is_empty() {
         return Err(GenError::Empty("the stock casts no outline to clear around the part".into()));
@@ -190,7 +193,8 @@ pub(super) fn around_part(part: &[Triangle], stock: &[Triangle], planes: &[f64])
     let full = |z: f64| {
         format!(
             "a whole-model pocket clears the stock around the part, and the part fills the whole stock \
-             outline at Z {z:.3} - pick the pocket's faces instead"
+             outline at Z {} - pick the pocket's faces instead",
+            units::len(z, unit, 3)
         )
     };
     Ok(minus_standing(&enclosed, part, planes, full)?.unwrap_or(enclosed))
@@ -305,13 +309,13 @@ mod law {
         .expect("ring");
         let planes = ladder_planes(20.0, 0.0, 4.6);
         assert!(planes.iter().all(|&z| !(17.0..19.0).contains(&z)), "{planes:?}");
-        let r = pocket_region_on_part(vec![ring.clone()], &part, &planes).expect("region");
+        let r = pocket_region_on_part(vec![ring.clone()], &part, &planes, Unit::Millimeters).expect("region");
         assert!(!r.contains(Point2::new(8.0, 0.0)), "under the lip is part material");
         assert!(r.contains(Point2::new(0.0, 0.0)) && r.contains(Point2::new(5.5, 0.0)), "the open pocket stays");
         assert!((r.area() - 16.0 * 20.0).abs() < 1e-3, "the square less the lip: {}", r.area());
         // No lip, no shadow inside: today's region, byte for byte.
         part.truncate(part.len() - 12);
-        let plain = pocket_region_on_part(vec![ring.clone()], &part, &planes).expect("region");
+        let plain = pocket_region_on_part(vec![ring.clone()], &part, &planes, Unit::Millimeters).expect("region");
         assert_eq!(plain.loops(), Region::new(vec![ring]).expect("region").loops());
     }
 

@@ -127,6 +127,10 @@ pub fn solid(a: &Accessory) -> Result<Vec<Triangle>, String> {
         Accessory::SoftJaw { width, height, thickness } => {
             cuboid(p(-0.5 * width, 0.0, 0.0), p(0.5 * width, thickness, height))
         }
+        // The bores and bolt counterbores drawn solid: never less steel.
+        Accessory::RotarySubplate { length, width, thickness, bore_x, bore_y, .. } => {
+            cuboid(p(-bore_x, -bore_y, 0.0), p(length - bore_x, width - bore_y, thickness))
+        }
         Accessory::StepBlock { steps, rise, run, width } => {
             prism(&steps_profile(steps, rise, run), -0.5 * width, 0.5 * width)?
         }

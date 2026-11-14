@@ -50,7 +50,10 @@ pub(super) const SEC_MACHINE: usize = 5;
 /// exactly these: no dead tabs.
 pub(crate) fn has_section(kind: OpType, s: usize) -> bool {
     match s {
-        SEC_GEO | SEC_HEIGHTS | SEC_FEEDS => true,
+        SEC_GEO | SEC_HEIGHTS => true,
+        // A wire cut states no feed (#532): the control's generator
+        // sets the rate, so the kind has no Feeds tab.
+        SEC_FEEDS => kind != OpType::WireContour,
         SEC_PASSES => {
             !matches!(
                 kind,

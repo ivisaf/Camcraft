@@ -34,18 +34,29 @@ use crate::egui_app::ground_ink::{Overlay, light_ground, overlay};
 
 /// Keyboard modifiers as the pick law reads them - the winit state or the
 /// egui `Modifiers`, converted at the shell's edge so the law itself names
-/// no windowing library. Ctrl/Shift add to a feature pick, Alt in Edge
-/// mode takes the one segment under the cursor.
+/// no windowing library. `command` is the platform command modifier
+/// (Cmd on macOS, Ctrl elsewhere - the key the shortcuts use, #1238): it
+/// adds to a feature pick or toggles one in Edge mode. Shift adds (and
+/// closes a loop in Edge mode); Alt in Edge mode takes the one segment
+/// under the cursor. Control on macOS is the secondary click, so it is not
+/// the add key there.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Mods {
-    pub ctrl: bool,
+    pub command: bool,
     pub shift: bool,
     pub alt: bool,
 }
 
 impl From<ModifiersState> for Mods {
     fn from(m: ModifiersState) -> Self {
-        Mods { ctrl: m.control_key(), shift: m.shift_key(), alt: m.alt_key() }
+        let command = if cfg!(target_os = "macos") { m.super_key() } else { m.control_key() };
+        Mods { command, shift: m.shift_key(), alt: m.alt_key() }
+    }
+}
+
+impl From<egui::Modifiers> for Mods {
+    fn from(m: egui::Modifiers) -> Self {
+        Mods { command: m.command, shift: m.shift, alt: m.alt }
     }
 }
 
@@ -84,20 +95,10 @@ pub(crate) fn ray_at(state: &State, p: [f32; 2]) -> Option<([f64; 3], [f64; 3])>
 /// A click inside the viewport, routed by the pick mode: models,
 /// feature faces, or edge chains.
 pub(crate) fn pick_at(state: &mut State, p: [f32; 2], mods: Mods) {
-    // Anchor picking wins over entity picking: in pick mode a click ON a
-    // marker places the origin there (same command the pane grid
-    // queues); a click beside one still picks normally, so the viewport
-    // never stops behaving like the viewport.
-    if state.wcs_ui.pick_anchor
-        && let Some((k, pos)) = anchor_hit(state, p, 12.0)
-    {
-        state.wcs_ui.anchor_xy = k;
-        state.pending.push_back(CommandKind::SetWcs {
-            pos,
-            roll_deg: state.wcs_ui.roll_deg,
-            pitch_deg: state.wcs_ui.pitch_deg,
-            yaw_deg: state.wcs_ui.yaw_deg,
-        });
+    // The WCS page's picks win over entity picking while armed: anchor
+    // markers (a click beside one still picks normally) and the #739
+    // circle-centre edge pick.
+    if crate::wcs_circle_pick::take_click(state, p) {
         return;
     }
     match state.geo_pick {
@@ -150,14 +151,14 @@ fn pick_model(state: &mut State, p: [f32; 2]) {
 /// write, never a command until Apply.
 pub fn queue_boundary_pick(state: &mut State, pick: GeoSel, mods: Mods) {
     let Some(target) = state.boundary_pick else {
-        queue_feature_pick(state, pick, mods.ctrl || mods.shift);
+        queue_feature_pick(state, pick, mods.command || mods.shift);
         return;
     };
     if state.op_ui.name.is_empty() {
         state.status = String::from("open an operation first - geometry picks fill the open one");
         return;
     }
-    let m = crate::boundary_draft::PickMods { toggle: mods.ctrl, close: mods.shift && !mods.ctrl };
+    let m = crate::boundary_draft::PickMods { toggle: mods.command, close: mods.shift && !mods.command };
     crate::boundary_draft::take_pick(state, target, pick, m);
 }
 
@@ -181,7 +182,7 @@ pub(crate) fn update_hover(state: &mut State, p: [f32; 2], held: bool) {
     }
     // #692: a feature mode hovers exactly what its click would take - the
     // one pick rule, the armed tool's kinds.
-    if state.geo_pick != GeoPick::Model {
+    if state.geo_pick != GeoPick::Model || state.wcs_ui.pick_circle {
         crate::feature_click::hover(state, p);
         return;
     }
@@ -341,6 +342,11 @@ pub(crate) struct Gizmo {
     pub rot: [f64; 4],
     /// Triad axes sit on X/Y/Z at this exact position with no rotation.
     pub world_axes: bool,
+    /// #727: whose origin this is - the work offset's entity name as the
+    /// Setup pane shows it (`G54`, `Setup2/WCS`), or `World` for the
+    /// dimmed neutral axes. Drawn beside the origin so whose-zero is
+    /// whose reads at a glance, with no hover.
+    pub name: String,
 }
 
 /// The axis inks on a light viewport (#698): the dark set washes out on
@@ -368,6 +374,17 @@ const AXES: [([f32; 3], [f64; 3]); 3] = [
 /// How much the neutral world axes are dimmed against a work offset's
 /// triad (#195: was 0.55 for the lines - too dark to read).
 const WORLD_DIM: f32 = 0.8;
+
+/// #727: the name the dimmed world axes carry, and the gray they wear it
+/// in - neutral, because no axis color belongs to the world as a whole.
+const WORLD_LABEL: &str = "World";
+const WORLD_GRAY: f32 = 0.75;
+
+/// #727: how far a gizmo's name sits below its projected origin, in uv
+/// (same currency as `axis_note::NOTE_DROP_UV`) - enough to clear the
+/// axis lines that meet at the origin, close enough to read as the
+/// origin's own tag.
+const NAME_DROP_UV: f32 = 0.02;
 
 /// Screen-space stroke widths of a gizmo axis, px (#195): the coloured
 /// line over a dark outline that keeps it readable on any ground.
@@ -421,6 +438,7 @@ pub(crate) fn gizmos(state: &State) -> Vec<Gizmo> {
             pos: [loc.pos.x, loc.pos.y, loc.pos.z],
             rot: loc.rot,
             world_axes: false,
+            name: name.clone(),
         });
     }
     let claims_origin = out.iter().any(|g| {
@@ -437,6 +455,7 @@ pub(crate) fn gizmos(state: &State) -> Vec<Gizmo> {
             pos: [0.0, 0.0, 0.0],
             rot: [0.0, 0.0, 0.0, 1.0],
             world_axes: true,
+            name: WORLD_LABEL.to_string(),
         });
     }
     out
@@ -571,9 +590,11 @@ fn push_poly(
 }
 
 /// Screen-space labels for the gizmos just drawn (feedback 7): each axis
-/// tip gets its letter, projected through the same camera math. Entries are
-/// (uv within the viewport image, linear rgb, text); tips behind the camera
-/// or at degenerate `w` are skipped.
+/// tip gets its letter, projected through the same camera math. #727:
+/// each gizmo also wears its name just under its origin - the work
+/// offset's entity name, or `World` for the dimmed neutral axes. Entries
+/// are (uv within the viewport image, linear rgb, text); tips behind the
+/// camera or at degenerate `w` are skipped.
 pub(crate) fn overlay_labels(state: &State, aspect: f64) -> Vec<([f32; 2], [f32; 3], String)> {
     let len = gizmo_len(state);
     let mvp = state.cam.mvp(aspect);
@@ -637,6 +658,24 @@ pub(crate) fn overlay_labels(state: &State, aspect: f64) -> Vec<([f32; 2], [f32;
     let mut notes = crate::axis_note::triad_notes(state);
     for gizmo in gizmos(state) {
         let base = Point3::new(gizmo.pos[0], gizmo.pos[1], gizmo.pos[2]);
+        // #727: the gizmo's own name, at its origin - whose zero this is,
+        // readable without a hover. Emitted before the letters so each
+        // name leads its gizmo's labels. The theme's Z-axis blue for
+        // offsets (via `axes()`, so it lifts for the light ground like
+        // the triad does); neutral gray dimmed like the world axes it
+        // stands for.
+        // #645: names only while the user's "Show origin names" is on -
+        // the letters below never depend on it, and no line does.
+        if state.show_gizmo_names
+            && let Some(uv) = project_uv(&mvp, gizmo.pos)
+        {
+            let c = if gizmo.world_axes {
+                [WORLD_GRAY * WORLD_DIM; 3]
+            } else {
+                axes()[2].0
+            };
+            out.push(([uv[0], uv[1] + NAME_DROP_UV], c, gizmo.name.clone()));
+        }
         for (axis, (rgb, dir)) in axes().iter().enumerate() {
             let p = transform_point(
                 Point3::new(
@@ -709,6 +748,10 @@ const GRID_MAJOR: [f32; 3] = [0.23, 0.25, 0.29];
 /// screen; the outermost rings fade into the ground (issue: an empty
 /// viewport read as a void).
 const GRID_HALF_STEPS: i64 = 24;
+/// Beyond this (mm) the grid is not drawn: far past any machine table, and
+/// where `step * GRID_HALF_STEPS` can overflow to infinity and stretch the
+/// line-index range to the whole of i64.
+const GRID_MAX_COORD: f64 = 1.0e9;
 /// Every fifth line is a major one (0.5, 1, 5, 10, 50 ... on a 1-2-5 step).
 const GRID_MAJOR_EVERY: i64 = 5;
 
@@ -727,6 +770,17 @@ pub(crate) fn ground_grid_lines(state: &State) -> Vec<[f32; 6]> {
     }
     let step = nice_step(state.cam.dist / 10.0);
     let (cx, cy) = (state.cam.target[0], state.cam.target[1]);
+    // A non-finite or absurdly far target (or a non-finite step) would
+    // turn the index range below into billions of lines; the grid is
+    // furniture, so it simply stays out of that frame (Prime Directive:
+    // no hang).
+    if !(cx.is_finite() && cy.is_finite() && step.is_finite())
+        || cx.abs() > GRID_MAX_COORD
+        || cy.abs() > GRID_MAX_COORD
+        || step > GRID_MAX_COORD
+    {
+        return Vec::new();
+    }
     let reach = step * GRID_HALF_STEPS as f64;
     let (k0x, k1x) = (
         ((cx - reach) / step).floor() as i64,
@@ -1268,7 +1322,12 @@ pub(crate) fn height_planes(state: &State) -> Vec<HeightPlane> {
         // The probe travels at its clearance plane only (#108), and
         // so does the torch between contours (#670).
         | operation::OpParams::Probe { .. }
-        | operation::OpParams::PlasmaProfile(_) => None,
+        | operation::OpParams::PlasmaProfile(_)
+        // The wire never lifts out of the work (#532): no hop plane.
+        | operation::OpParams::WireContour(_) => None,
+        // The electrode retracts to its approach plane only (#541).
+        | operation::OpParams::SinkerBurn(_)
+        | operation::OpParams::SinkerSideBurn(_) => None,
     };
     if let Some(hop) = hop
         && let (Some(r), Some(c)) = (hop.z_in(world, setup, src), draft.clearance().z_in(world, setup, src))
@@ -1397,6 +1456,16 @@ pub(crate) fn height_planes(state: &State) -> Vec<HeightPlane> {
         // The plate the torch cuts through: its top (the cut plane) and
         // bottom (#670).
         | operation::OpParams::PlasmaProfile(operation::PlasmaOp { top_z, bottom_z, .. })
+        // The workpiece the wire cuts through: its two programmed
+        // planes (#532).
+        | operation::OpParams::WireContour(operation::WireContourOp { top_z, bottom_z, .. })
+        // The work top and the cavity floor datum the burn stops at (#541).
+        | operation::OpParams::SinkerBurn(operation::SinkerBurnOp { top_z, floor_z: bottom_z, .. })
+        // #545: the side burn's own plunge.
+        | operation::OpParams::SinkerSideBurn(operation::SinkerSideBurnOp {
+            burn: operation::SinkerBurnOp { top_z, floor_z: bottom_z, .. },
+            ..
+        })
         | operation::OpParams::Deburr { top_z, bottom_z, .. } => {
             if let Some(z) = top_z.z_in(world, setup, src) {
                 out.push(HeightPlane {

@@ -213,30 +213,14 @@ pub(super) fn fields(ui: &mut Ui, world: &World, params: &mut OpParams, cx: &mut
             plunge_feed,
             climb,
             holes,
+            pitch,
+            hand,
+            external,
+            passes,
         } => {
             if tab == SEC_GEO {
-                field(ui, "Holes");
-                if holes.is_empty() {
-                    hint(ui, "none yet - Detect holes reads them from the model");
-                }
-                for (i, h) in holes.iter().enumerate() {
-                    let floor = if h.through {
-                        "through".to_owned()
-                    } else {
-                        format!("floor {}", units::len(h.floor_z, u, 3))
-                    };
-                    ui.label(format!(
-                        "{}  X {}  Y {}  Ø{}  entry {}  {floor}",
-                        i + 1,
-                        units::len(h.xy.x, u, 3),
-                        units::len(h.xy.y, u, 3),
-                        units::len(2.0 * h.radius, u, 3),
-                        units::len(h.entry_z, u, 3),
-                    ));
-                }
-                if ui.button("Detect holes").clicked() {
-                    cx.detect_holes = true;
-                }
+                // #985: holes, or bosses for an external thread.
+                cx.detect_holes |= super::thread_page::geometry_rows(ui, u, holes, external);
             }
             if tab == SEC_HEIGHTS {
                 height_editor(
@@ -254,13 +238,16 @@ pub(super) fn fields(ui: &mut Ui, world: &World, params: &mut OpParams, cx: &mut
                 });
             }
             if tab == SEC_PASSES {
+                super::thread_page::thread_rows(ui, u, pitch, hand);
                 prop_row(ui, "Radial infeed per pass", |ui| num(ui, u, infeed));
-                hint(ui, "rings from the tangent start to the finished wall; the pitch is the TOOL's number, not a parameter here");
+                hint(ui, super::thread_page::infeed_hint(*external));
+                super::thread_page::pass_rows(ui, u, passes);
             }
             if tab == SEC_FEEDS {
                 prop_row(ui, "Feed", |ui| num_feed(ui, u, feed));
                 prop_row(ui, "Plunge feed", |ui| num_feed(ui, u, plunge_feed));
                 check_row(ui, "Climb milling", climb);
+                super::thread_page::spindle_rows(ui, passes);
             }
         }
         _ => {}

@@ -30,7 +30,15 @@ pub struct MachineEditor {
     pub machine: Machine,
 }
 
-const KIND_WORDS: [&str; 5] = ["auto (axis inventory)", "mill", "lathe", "mill-turn", "plasma"];
+const KIND_WORDS: [&str; 7] = [
+    "auto (axis inventory)",
+    "mill",
+    "lathe",
+    "mill-turn",
+    "plasma",
+    "wire_edm",
+    "sinker_edm",
+];
 
 pub(crate) fn window(ctx: &egui::Context, state: &mut State) {
     // Take the draft out for the frame: the draw wants `&mut` on it
@@ -57,13 +65,26 @@ pub(crate) fn window(ctx: &egui::Context, state: &mut State) {
                 ui.label("Vendor");
                 ui.add(TextEdit::singleline(&mut ed.machine.vendor).desired_width(110.0));
             });
-            draw_kind(ui, &mut ed.machine);
-            draw_spindle(ui, u, &mut ed.machine);
-            draw_axes(ui, u, &mut ed.machine);
-            draw_tooling(ui, u, &mut ed.machine);
-            draw_coolants(ui, &mut ed.machine);
-            ui.separator();
-            super::machine_grid::machine_grid(ui, "machine_editor_overview", &ed.machine, u, &[]);
+            // The fields scroll; Apply and Revert stay in reach (#535: the
+            // wire section makes the window taller than a short screen).
+            let max_h = (ctx.content_rect().height() * 0.7).max(200.0);
+            egui::ScrollArea::vertical().max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
+                draw_kind(ui, &mut ed.machine);
+                // #535: a wire EDM has no spindle, tool changer or coolant -
+                // its own section (the wire keys, codes and conditions) stands
+                // in their place.
+                if Kind::WireEdm == machine::kind(Some(&ed.machine)) {
+                    super::machine_edm::section(ui, u, &mut ed.machine);
+                    draw_axes(ui, u, &mut ed.machine);
+                } else {
+                    draw_spindle(ui, u, &mut ed.machine);
+                    draw_axes(ui, u, &mut ed.machine);
+                    draw_tooling(ui, u, &mut ed.machine);
+                    draw_coolants(ui, &mut ed.machine);
+                }
+                ui.separator();
+                super::machine_grid::machine_grid(ui, "machine_editor_overview", &ed.machine, u, &[]);
+            });
             ui.horizontal(|ui| {
                 if ui.button("Apply").clicked() {
                     apply = true;
@@ -104,6 +125,8 @@ fn draw_kind(ui: &mut Ui, m: &mut Machine) {
         Some(Kind::Lathe) => 2,
         Some(Kind::MillTurn) => 3,
         Some(Kind::Plasma) => 4,
+        Some(Kind::WireEdm) => 5,
+        Some(Kind::SinkerEdm) => 6,
         None => 0,
     };
     let before = idx;

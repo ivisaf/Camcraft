@@ -112,11 +112,16 @@ fn source_region(
         }
         // The probe bounds no area (#108): its generation never asks.
         OpParams::Probe { .. } => Err(GenError::Invalid("a probe has no machining region".into())),
+        // The sinker burn bounds no area (#541): its face is the electrode's.
+        OpParams::SinkerBurn(_) | OpParams::SinkerSideBurn(_) => Err(GenError::Invalid("a sinker burn has no machining region".into())),
         // The plasma cut goes THROUGH the plate (#670): what it can cut
         // is the through-silhouette - a blind pocket is no torch's work.
         OpParams::PlasmaProfile(_) => {
             slice::project(&material.facets, FOOTPRINT_SAMPLES).map_err(from_slice)
         }
+        // The wire cuts THROUGH the workpiece too (#532): its profile
+        // is the through-silhouette.
+        OpParams::WireContour(_) => slice::project(&material.facets, FOOTPRINT_SAMPLES).map_err(from_slice),
         // The 3D pocket's machine area is a silhouette, not a section:
         // columns whose surface sits below the first level are still
         // cut, down to that surface - a section would miss them. The
@@ -325,4 +330,43 @@ pub(super) fn rim_is(l: &Loop, h: Hole) -> bool {
     let tol = (0.02 * h.radius).max(0.1);
     pts.iter()
         .all(|p| ((p.x - h.xy.x).hypot(p.y - h.xy.y) - h.radius).abs() <= tol)
+}
+
+/// The declared circles `(centre, radius)` [`region_for`]'s rim loops
+/// draw for a containment kind (#1057): a Z drill's, a bore's or a
+/// thread mill's holes. The verify reads a loop tracing one at the
+/// untightened gouge tolerance (`VerifyContext::rims`). Empty for every
+/// other kind, and for a radial drill (its region has no rims).
+pub(super) fn rims_of(params: &OpParams) -> Vec<(Point2, f64)> {
+    match params {
+        OpParams::Drill { holes, cross, .. } if cross.is_empty() => holes.iter().map(|h| (h.xy, h.radius)).collect(),
+        // Thread is not declared (#1073 review): its region reads the
+        // major circle (#1071, `thread_rims::major_rims`), not the minor
+        // rim, so a minor declaration would trace no loop - the thread mill
+        // stays on the tightened reading, the conservative side.
+        OpParams::Bore { holes, .. } => holes.iter().map(|h| (h.xy, h.radius)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The stock the verify's column law reads as material (`VerifyContext::
+/// stock`): the setup's stock when the source is a model, and - #1066 -
+/// the source itself when the source IS the stock and the kind's region
+/// punches the holes' rims out of it (Bore, Thread). That region says
+/// where the walls stand, not where material is: the hole's column above
+/// its mouth is uncut stock until something removes it, and read through
+/// the punched region the ladder's entry rapid down to the mouth's plunge
+/// height under a taller block went unjudged and posted. Every other
+/// stock-sourced kind's region IS the stock's footprint, so it keeps
+/// `None` (the region stands in) byte for byte.
+pub(super) fn judged_stock<'a>(
+    stock_facets: Option<&'a [Triangle]>,
+    src: &SrcRef,
+    params: &OpParams,
+    material: &'a Material,
+) -> Option<&'a [Triangle]> {
+    stock_facets.or_else(|| {
+        (matches!(src, SrcRef::Stock) && matches!(params, OpParams::Bore { .. } | OpParams::Thread { .. }))
+            .then_some(&material.facets[..])
+    })
 }

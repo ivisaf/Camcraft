@@ -225,6 +225,25 @@ impl AlignPartToSetup {
         Self::new(world, setup, Some(at))
     }
 
+    /// Would [`Self::align_from_axes`] be accepted? The same refusals,
+    /// by name, without building the command (the Setups page's Apply).
+    pub fn check_align(world: &World, setup: &str, axes: &crate::pick::InPlaneAxes) -> Result<(), CommandError> {
+        let at = crate::pick::align_from_axes(world, setup, axes).map_err(CommandError::Invalid)?;
+        change_of(world, setup, Some(at)).map(|_| ())
+    }
+
+    /// Align the part from its two picked axes (#769): with both +Y and
+    /// +X picked their directions define the full 3D frame - the
+    /// primary kept exactly, the other made square to it, +Z where the
+    /// right-hand rule puts it - read by
+    /// [`crate::pick::align_from_axes`] through the setup's current
+    /// alignment. One picked axis keeps the in-plane turn (#557).
+    /// Refused by name before any write.
+    pub fn align_from_axes(world: &World, setup: &str, axes: &crate::pick::InPlaneAxes) -> Result<Self, CommandError> {
+        let at = crate::pick::align_from_axes(world, setup, axes).map_err(CommandError::Invalid)?;
+        Self::new(world, setup, Some(at))
+    }
+
     /// One of the Setups page's quick choices.
     pub fn preset(world: &World, setup: &str, preset: AlignPreset) -> Result<Self, CommandError> {
         Self::angles(world, setup, preset.angles())

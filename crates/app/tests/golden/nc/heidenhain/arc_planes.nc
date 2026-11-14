@@ -1,3 +1,4 @@
+; synthetic program, posted for syntax conformance
 %VMC_3-AXIS G71 *
 N10 ; OPERATION: Plane arcs*
 N20 G247 Q339=1*

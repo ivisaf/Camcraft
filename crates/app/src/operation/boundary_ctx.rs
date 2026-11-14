@@ -190,6 +190,7 @@ fn build(world: &World, op: &Operation, tool_r: f64, material: &Material, part_s
         islands,
         extra,
         open,
+        unit: crate::units::of(world),
     })
 }
 

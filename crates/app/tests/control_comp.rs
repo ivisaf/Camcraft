@@ -12,8 +12,8 @@
 //! Regenerate after an intentional change:
 //! `WRITE_GOLDEN=1 cargo test -p camcraft-app --test control_comp`
 //!
-//! Gate map (M4.4): covers app::commands, app::links, app::machining2d,
-//! app::model, app::operation, app::post, app::posting, app::project.
+//! Gate map (M4.4): covers app::commands, motion::links, motion::machining2d,
+//! app::model, app::operation, post::post, app::posting, app::project.
 
 mod common;
 
@@ -186,7 +186,7 @@ fn the_lathe_and_the_other_mill_posts_refuse_a_control_op_by_name_and_the_gate_b
     let m = posting::machine_value(&world);
     let out = engine::run(&post_text("fanuc-lathe"), &m, &text).unwrap();
     assert!(out.warnings.iter().any(|w| w.contains("nose-radius compensation")), "{:?}", out.warnings);
-    for stem in ["heidenhain", "tormach"] {
+    for stem in ["heidenhain", "tormach", "grblhal", "tinyg"] {
         let out = engine::run(&post_text(stem), &m, &text).unwrap();
         assert!(out.warnings.iter().any(|w| w.contains("G41/G42) is not supported")), "{stem}: {:?}", out.warnings);
         let mut path = std::env::temp_dir();

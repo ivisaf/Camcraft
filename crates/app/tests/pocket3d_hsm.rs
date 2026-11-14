@@ -11,7 +11,7 @@
 //! `golden_cl`'s business, unchanged.
 //!
 //! Gate map (M11.4): covers app::operation (params digest, generate's
-//! Pocket3D arm), app::commands, app::verify.
+//! Pocket3D arm), app::commands, sim::verify.
 
 use camcraft_app::cl::{MoveKind, Toolpath};
 use camcraft_app::commands::{AddTool, CreateOperation, GenerateOperation, History, ImportModel, SetStock};
@@ -97,25 +97,57 @@ fn the_users_bore_roughs_adaptive_level_by_level_and_verifies_clean() {
     // the rings. A budget that cut a level would change the path silently
     // under the assertions above.
     assert!(!path.notes.iter().any(|n| n.contains("planning budget") || n.contains("too detailed")), "{:?}", path.notes);
-    // Which levels fall back (measured on main f490458a): Z 20 and Z 10,
-    // each because its HSM plan would cross itself. Until PR #839 (merge
-    // 575f02d8, issue #689) only Z 20 did: #839 caps the STEP chord at
-    // 0.005 mm (it was ~0.1% of the model extent), so the bore's wall is
-    // meshed far finer, the level outlines the planner works on change,
-    // and the Z 10 plan now crosses itself at (-1.99, -0.13). Getting
-    // that level's HSM plan back is Refs #980 (part 2).
-    let mut fell_z: Vec<&str> = fell.iter().filter_map(|n| ["Z 20.000", "Z 10.000"].into_iter().find(|z| n.contains(z))).collect();
-    fell_z.sort_unstable();
-    assert!(fell.len() == 2 && fell_z == ["Z 10.000", "Z 20.000"], "{fell:?}");
-    assert!(fell.iter().all(|n| n.contains("crosses itself")), "{fell:?}");
-    // The path as main plans it (measured on main f490458a, identical over
-    // repeated runs, and on 575f02d8 alike: 6500 moves, 6464 planar feeds, 222
-    // arcs; before #839, on 575f02d8^1: 5530 / 5497 / 600). #839's finer
-    // mesh moves them: a second rings level (no arcs, more chords) and
-    // fewer fitted arcs on the HSM levels. A change to the planner or the
-    // mesh that moves these re-measures them and says why.
+    // No level falls back (issue #980 part 2). Since #850 the top level
+    // (Z 20) fell back as "crosses itself", and since PR #839 (the 0.005
+    // mm STEP chord) the Z 10 level too - both for one reason, not the
+    // mesh: the entry orbit's closing vertex stood an ulp off its start
+    // (`adaptive::rings::circle`), and the plan's crossing law read the
+    // spiral leaving it as crossing the orbit's first chord. Which levels
+    // the float noise hit was luck of the outline; #839 only reshuffled
+    // it. The orbit now closes exactly on its start and every level keeps
+    // its HSM plan.
+    assert!(fell.is_empty(), "{fell:?}");
+    // The path as the fix plans it - every level HSM (Z 20 back on its 58
+    // microlift returns, so far more moves than its rings), its fitted
+    // arcs back. Before: main f490458a 6500 / 6464 / 222 (Z 20 and Z 10
+    // rings); 575f02d8^1 (before #839) 5530 / 5497 / 600 (Z 20 rings).
+    // The planner's output differs slightly between platforms (floating
+    // point differs in the last bits; making it bit-stable is #1010), so
+    // the triple is exact PER MEASURED PLATFORM - a real change still
+    // trips it on the release platform - and a band only where nobody has
+    // measured yet. A change to the planner or the mesh that moves these
+    // re-measures them and says why.
     println!("moves {} planar {planar} arcs {arcs} notes {:?}", path.moves.len(), path.notes);
-    assert_eq!((path.moves.len(), planar, arcs), (6500, 6464, 222), "the bore's path as main plans it: {:?}", path.notes);
+    let got = (path.moves.len(), planar, arcs);
+    assert!(bore_path_matches(got), "the bore's path as the fix plans it: {got:?} {:?}", path.notes);
+}
+
+/// The bore's (moves, planar feeds, arcs) on this platform (issue #980).
+fn bore_path_matches(got: (usize, usize, usize)) -> bool {
+    if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        // Issue #1402: measured on main 5eeb0370e, release, two runs
+        // identical; every level verifies clean, none falls back, no
+        // planning budget is reached. Before: (16197, 15458, 1581),
+        // measured on issue/980-bore-hsm-plan and stale after #1376.
+        got == (16017, 15360, 1427)
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        // Issue #882 (PR #1376): measured by its reviewer at 8cd4c918 on
+        // Apple silicon, release, two runs identical; every level
+        // verifies clean, none falls back. Before: (16160, 15432, 1571).
+        got == (16026, 15382, 1413)
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        // Issue #882: measured in release and debug, identical. Thinning
+        // the growth opening changes its sub-micron geometry and the
+        // fitted arcs (Z 20: 50 microlift returns, 9 rides, 1 retract
+        // hop). Every level verifies clean, none falls back, and no
+        // planning budget is reached. Before: (15561, 14837, 1561).
+        got == (16029, 15372, 1427)
+    } else {
+        // Not measured here yet: measure this platform and add its exact
+        // triple above. Until then a band covering both measured ones.
+        let (moves, planar, arcs) = got;
+        (16100..=16260).contains(&moves) && (15380..=15520).contains(&planar) && (1560..=1600).contains(&arcs)
+    }
 }
 
 #[test]

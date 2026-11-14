@@ -4,12 +4,15 @@
 //! units (#596), each shown under the post picker while its post is the
 //! document's, and per-operation smoothing (#616) for every mill post. A
 //! pick queues the
-//! undoable `SetPostOptions`; the widget only reads the singleton.
+//! undoable `SetPostOptions`; the widget only reads the singleton. The
+//! document's unit (#902) - display and posted program - is one row
+//! shown on both the Stock page and the Post section, queuing `SetUnits`.
 //! Provenance: our own panel; the choice's meaning is the post's
 //! (assets/posts/fanuc-lathe.cps, assets/posts/tormach-lathe.cps).
 
 use camcraft_app::posting;
 use camcraft_app::schema::{EndUnits, PostOptions, PostRef, ThreadingOutput};
+use camcraft_app::units::Unit;
 use egui::Ui;
 
 use crate::state::{CommandKind, State};
@@ -107,4 +110,23 @@ pub(super) fn end_units_picker(ui: &mut Ui, state: &mut State) {
     if let Some(u) = pick {
         state.pending.push_back(CommandKind::SetPostOptions(PostOptions { end_units: u, ..now }));
     }
+}
+
+/// The document's unit (#902), straight off the world singleton: one
+/// setting for every number shown and for the program every post
+/// writes (G21 / G20, Heidenhain G71 / G70, 840D G710 / G700). A click
+/// queues the undoable `SetUnits`; there is no mirror to keep in step.
+pub(super) fn units_row(ui: &mut Ui, state: &mut State, label: &str) {
+    let u = state.units();
+    ui.horizontal(|ui| {
+        ui.label(label);
+        for cand in [Unit::Millimeters, Unit::Inches] {
+            let r = ui.radio(u == cand, cand.label()).on_hover_text(
+                "the document's unit: every number shown, and the unit every post writes the program in (G21 mm / G20 inch, or the control's own word) - the machine file does not choose it",
+            );
+            if r.clicked() && u != cand {
+                state.pending.push_back(CommandKind::SetUnits(cand));
+            }
+        }
+    });
 }

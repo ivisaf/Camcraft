@@ -1,3 +1,4 @@
+; synthetic program, posted for syntax conformance
 ; VMC 3-AXIS
 ; OPERATION: Plane arcs - G54
 N10 G17 G710 G90 G54 G40 G80

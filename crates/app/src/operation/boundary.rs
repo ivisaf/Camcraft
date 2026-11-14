@@ -89,6 +89,9 @@ pub struct AreaCtx {
     pub(super) islands: bool,
     pub(super) extra: Vec<(BoundaryMode, Region)>,
     pub(super) open: Option<(OpenGeom, ChainSide)>,
+    /// #740: the document's display unit, so the area law's refusals (on
+    /// worker threads, world-free) spell their depths through this lens.
+    pub(super) unit: crate::units::Unit,
 }
 
 impl AreaCtx {

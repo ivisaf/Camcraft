@@ -1,6 +1,6 @@
 //! The Edge-mode pick outside the boundary picker (user hand test
-//! 2026-11-06): Ctrl+click toggles one edge in/out of the operation's
-//! selection, Shift+click takes the whole face loop the edge lies on -
+//! 2026-11-06): Cmd/Ctrl+click (the platform command modifier, #1238)
+//! toggles one edge in/out of the operation's selection, Shift+click takes the whole face loop the edge lies on -
 //! one click closes a pocket rim. The loop finder is the boundary
 //! picker's (`operation::extend_to_loop`); every change is a command.
 //!
@@ -14,16 +14,17 @@ use camcraft_app::model;
 use crate::interact::{Mods, queue_feature_pick};
 use crate::state::{CommandKind, State};
 
-/// Route an edge pick by its modifiers: Shift = the whole loop, Ctrl =
-/// toggle this edge, plain = replace the selection with it.
+/// Route an edge pick by its modifiers: Shift = the whole loop, command
+/// (Cmd on macOS, Ctrl elsewhere) = toggle this edge, plain = replace the
+/// selection with it.
 pub fn queue_edge_pick(state: &mut State, pick: GeoSel, mods: Mods) {
     if state.op_ui.name.is_empty() || state.boundary_pick.is_some() {
-        queue_feature_pick(state, pick, mods.ctrl || mods.shift);
+        queue_feature_pick(state, pick, mods.command || mods.shift);
         return;
     }
-    if mods.shift && !mods.ctrl {
+    if mods.shift && !mods.command {
         take_loop(state, pick);
-    } else if mods.ctrl {
+    } else if mods.command {
         toggle(state, pick);
     } else {
         queue_feature_pick(state, pick, false);

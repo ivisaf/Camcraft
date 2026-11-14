@@ -3,7 +3,7 @@
 //! at command construction (validate early), and staleness is derived,
 //! never stored.
 //!
-//! Gate map (M4.4): covers app::cl, app::commands, app::drilling, app::finishing3d, app::geo2d, app::geometry, app::machining2d, app::model, app::operation, app::schema, app::stock, app::tools, app::verify, app::world.
+//! Gate map (M4.4): covers cl::cl, app::commands, motion::drilling, motion::finishing3d, geometry::geo2d, app::geometry, motion::machining2d, motion::machining3d, motion::multiaxis, motion::plunge_law, app::model, app::operation, app::schema, geometry::geometry::stock, tools::tools, sim::verify, app::world (the motion generators these tests drive end to end, #1068).
 //!
 //! Lane shape (M13.8): the debug ladder runs every test here in seconds.
 //! The six slow generate-and-verify laws (swarf, the swarf ladder,
@@ -4025,6 +4025,7 @@ fn finish_params(top_z: f64, bottom_z: f64, tolerance: f64) -> OpParams {
         entry_ramp: false,
         steep_stepover: None,
         pencil_reference: None,
+        fill_openings: None,
     }
 }
 
@@ -6594,6 +6595,10 @@ fn stub_tool() -> Tool {
         tool_material: None,
         flutes: None,
         orientation: None,
+        pitch_min: 0.0,
+        catalog: camcraft_tools::catalog_fields::ToolCatalog::default(),
+        cutting: Vec::new(),
+        turning: None,
     }
 }
 
@@ -6821,9 +6826,13 @@ fn multiaxis_rough_refuses_a_slot_the_cone_cannot_clear() {
     };
     let (world, _history) = job(true);
     let cmd = GenerateOperation::new(&world, "SLOT");
-    let CommandError::Machining(msg) = cmd
-        .err()
-        .expect("a 10-wide shank must refuse a 9-wide slot")
+    let err = cmd.err().expect("a 10-wide shank must refuse a 9-wide slot");
+    // #1015: the shank refusal hands back the plan before its move as a
+    // ghost, so it arrives as `MachiningGhost`, which reads as `Machining`.
+    assert!(err.ghost().is_some(), "the shank refusal carries its ghost");
+    let (CommandError::Machining(msg)
+    | CommandError::MachiningAt { msg, .. }
+    | CommandError::MachiningGhost { msg, .. }) = err
     else {
         panic!("expected a machining refusal");
     };
@@ -7647,4 +7656,109 @@ fn deburr_brick() -> camcraft_app::geometry::Mesh {
         Point3::new(-20.0, -10.0, 0.0),
         Point3::new(20.0, 10.0, 10.0),
     )
+}
+
+/// #1196: the land model end to end - a 12 mm blind pocket in a plate,
+/// finished with a 6 mm ball. Off, the raster dives to the pocket
+/// floor (the model is the finished surface). With `fill_openings` at
+/// 14 mm the pocket is lidded at its rim on the drive surface only:
+/// the path never descends into it, the op still verifies clean
+/// against the REAL model (status Ok), and the path says what stands
+/// as land.
+/// #1196's fixture: a 24 mm plate (top z 10) with a 12 mm blind
+/// pocket (floor z 5) in its middle, a 6 mm ball, on box stock.
+fn land_pocket_world() -> (World, History) {
+    let world = new_world();
+    let mut history = History::default();
+    box_stock(&world, &mut history, 60.0, 60.0, 25.0);
+    add_tool(&world, &mut history, "BN-0600");
+    let quad = |p: [Point3; 4]| vec![Triangle::new(p[0], p[1], p[2]), Triangle::new(p[0], p[2], p[3])];
+    let (t, f) = (10.0, 5.0);
+    let pt = Point3::new;
+    let mut facets = Vec::new();
+    facets.extend(quad([pt(-12.0, -12.0, t), pt(12.0, -12.0, t), pt(12.0, -6.0, t), pt(-12.0, -6.0, t)]));
+    facets.extend(quad([pt(-12.0, 6.0, t), pt(12.0, 6.0, t), pt(12.0, 12.0, t), pt(-12.0, 12.0, t)]));
+    facets.extend(quad([pt(-12.0, -6.0, t), pt(-6.0, -6.0, t), pt(-6.0, 6.0, t), pt(-12.0, 6.0, t)]));
+    facets.extend(quad([pt(6.0, -6.0, t), pt(12.0, -6.0, t), pt(12.0, 6.0, t), pt(6.0, 6.0, t)]));
+    facets.extend(quad([pt(6.0, -6.0, f), pt(-6.0, -6.0, f), pt(-6.0, -6.0, t), pt(6.0, -6.0, t)]));
+    facets.extend(quad([pt(6.0, 6.0, f), pt(6.0, -6.0, f), pt(6.0, -6.0, t), pt(6.0, 6.0, t)]));
+    facets.extend(quad([pt(-6.0, 6.0, f), pt(6.0, 6.0, f), pt(6.0, 6.0, t), pt(-6.0, 6.0, t)]));
+    facets.extend(quad([pt(-6.0, -6.0, f), pt(-6.0, 6.0, f), pt(-6.0, 6.0, t), pt(-6.0, -6.0, t)]));
+    facets.extend(quad([pt(-6.0, -6.0, f), pt(6.0, -6.0, f), pt(6.0, 6.0, f), pt(-6.0, 6.0, f)]));
+    facets.extend(quad([pt(-12.0, -12.0, 0.0), pt(12.0, -12.0, 0.0), pt(12.0, -12.0, t), pt(-12.0, -12.0, t)]));
+    facets.extend(quad([pt(12.0, -12.0, 0.0), pt(12.0, 12.0, 0.0), pt(12.0, 12.0, t), pt(12.0, -12.0, t)]));
+    facets.extend(quad([pt(12.0, 12.0, 0.0), pt(-12.0, 12.0, 0.0), pt(-12.0, 12.0, t), pt(12.0, 12.0, t)]));
+    facets.extend(quad([pt(-12.0, 12.0, 0.0), pt(-12.0, -12.0, 0.0), pt(-12.0, -12.0, t), pt(-12.0, 12.0, t)]));
+    history.execute(&world, ImportModel::from_mesh("pocket", Mesh::from_facets(facets)));
+    (world, history)
+}
+
+/// The fixture's 3D finish ask: Parallel, the stated land width.
+fn land_ask(fill: Option<f64>) -> OpParams {
+    let mut a = finish_params(10.0, 0.0, 0.1);
+    let OpParams::Finish3D { pattern, fill_openings, .. } = &mut a else {
+        panic!("finish3d params expected");
+    };
+    *pattern = camcraft_app::finishing3d::FinishPattern::Parallel;
+    *fill_openings = fill;
+    a
+}
+
+#[test]
+fn finish3d_fill_openings_lands_over_a_pocket_and_verifies_on_the_model() {
+    let (world, mut history) = land_pocket_world();
+    let t = 10.0;
+    let ask = land_ask;
+    let inside_low = |name: &str| {
+        cache(&world, name).expect("cached").path.moves.iter().any(|m| {
+            matches!(m.kind, camcraft_app::cl::MoveKind::Feed)
+                && m.to.x.abs() < 3.0
+                && m.to.y.abs() < 3.0
+                && m.to.z < t - 0.5
+        })
+    };
+    for (name, fill) in [("LOFF", None), ("LON", Some(14.0))] {
+        history.execute(
+            &world,
+            CreateOperation::new(&world, name, "BN-0600", SrcRef::Entity("pocket".into()), ask(fill)).expect("create"),
+        );
+        history.execute(&world, GenerateOperation::new(&world, name).expect("generate"));
+        assert_eq!(status(&world, name), OpStatus::Ok, "{name} must cut and verify clean on the real model");
+    }
+    assert!(inside_low("LOFF"), "off: the finish rides the pocket floor");
+    assert!(!inside_low("LON"), "on: the finish never descends into the lidded pocket");
+    let notes = cache(&world, "LON").expect("cached").path.notes;
+    assert!(notes.iter().any(|n| n.starts_with("land: 1 closed opening")), "{notes:?}");
+    // A nonsense width never reaches the generator: refused at the door.
+    assert!(CreateOperation::new(&world, "LBAD", "BN-0600", SrcRef::Entity("pocket".into()), ask(Some(-1.0))).is_err());
+}
+
+/// #1196 review: Pencil and Corner walk crease loci off the mesh's
+/// shared-edge index, which the lids never join - with the fill on
+/// they would still clean inside a lidded opening while the land note
+/// claimed it was flown over. The pair is refused by name instead, as
+/// Geodesic is, and cuts nothing.
+#[test]
+fn finish3d_fill_openings_refuses_pencil_and_corner_by_name() {
+    let (world, mut history) = land_pocket_world();
+    use camcraft_app::finishing3d::FinishPattern;
+    for (name, pat, word) in [("LPEN", FinishPattern::Pencil, "Pencil"), ("LCOR", FinishPattern::Corner, "Corner")] {
+        let mut a = land_ask(Some(14.0));
+        let OpParams::Finish3D { pattern, .. } = &mut a else {
+            panic!("finish3d params expected");
+        };
+        *pattern = pat;
+        history.execute(
+            &world,
+            CreateOperation::new(&world, name, "BN-0600", SrcRef::Entity("pocket".into()), a).expect("create"),
+        );
+        let CommandError::Machining(msg) = GenerateOperation::new(&world, name)
+            .err()
+            .expect("a crease pattern with fill must be refused")
+        else {
+            panic!("expected a machining refusal");
+        };
+        assert!(msg.contains(word) && msg.contains("cannot fill them") && msg.contains("Fill openings"), "{msg}");
+        assert_eq!(status(&world, name), OpStatus::Never, "a refusal cuts nothing");
+    }
 }

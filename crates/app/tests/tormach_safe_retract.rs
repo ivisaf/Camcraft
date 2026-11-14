@@ -7,7 +7,7 @@
 //! name - never a guess that could rapid the spindle down into the part.
 //! Provenance: our own tests over our own post and machine files.
 //!
-//! Gate map (M4.4): covers app::post (tormach.cps safe retract),
+//! Gate map (M4.4): covers post::post (tormach.cps safe retract),
 //! post::machine (safeRetractZ, model), machine::parse (safe_retract).
 
 use camcraft_app::machine::parse_mch;
@@ -85,15 +85,15 @@ fn the_shipped_tormach_machines_post_byte_identical() {
         if let Some(o) = without.as_object_mut() {
             assert!(o.remove("safeRetractZ").is_some(), "{name}: the mirror carries it");
         }
-        let a = engine::run(&cps(), &with, STREAM).expect("posts");
-        let b = engine::run(&cps(), &without, STREAM).expect("posts");
+        let a = engine::run_with(&cps(), &with, STREAM, &doc_units(&with)).expect("posts");
+        let b = engine::run_with(&cps(), &without, STREAM, &doc_units(&without)).expect("posts");
         assert!(a.warnings.is_empty() && b.warnings.is_empty(), "{name}: {:?} {:?}", a.warnings, b.warnings);
         assert_eq!(a.program, b.program, "{name}: byte-identical");
         assert_eq!(a.program.matches("G53 G0 Z0\nG30\n").count(), 3, "{name}: two changes + the end\n{}", a.program);
     }
     // No machine at all, and the default VMC: today's retract.
     for m in [Value::Null, serde_json::from_str(&read("assets/machines/3axis-vmc.mch")).expect("json")] {
-        let out = engine::run(&cps(), &m, STREAM).expect("posts");
+        let out = engine::run_with(&cps(), &m, STREAM, &doc_units(&m)).expect("posts");
         assert!(out.warnings.is_empty(), "{:?}", out.warnings);
         assert_eq!(out.program.matches("G53 G0 Z0\nG30\n").count(), 3, "{}", out.program);
     }
@@ -106,7 +106,7 @@ fn the_shipped_tormach_machines_post_byte_identical() {
 fn a_stated_safe_z_posts_that_z() {
     let text = file_form("LINUXCNC KNEE MILL", json!({ "safe_retract": 290.0 }));
     for m in [mounted(&text), serde_json::from_str(&text).expect("raw door")] {
-        let out = engine::run(&cps(), &m, STREAM).expect("posts");
+        let out = engine::run_with(&cps(), &m, STREAM, &doc_units(&m)).expect("posts");
         assert!(out.warnings.is_empty(), "{:?}", out.warnings);
         let p = &out.program;
         assert_eq!(p.matches("G53 G0 Z290\n").count(), 3, "{p}");
@@ -119,7 +119,7 @@ fn a_stated_safe_z_posts_that_z() {
         .replace("\"length\":\"mm\"", "\"length\":\"inch\"");
     let m = parse_mch(&inch).expect("parses");
     assert_eq!(m.safe_retract_z, Some(11.5 * 25.4));
-    let out = engine::run(&cps(), &machine::mirror(&m), STREAM).expect("posts");
+    let out = engine::run_with(&cps(), &machine::mirror(&m), STREAM, &doc_units(&machine::mirror(&m))).expect("posts");
     assert_eq!(out.program.matches("G53 G0 Z11.5\n").count(), 3, "{}", out.program);
 }
 
@@ -130,7 +130,7 @@ fn a_stated_safe_z_posts_that_z() {
 fn a_non_tormach_machine_without_a_safe_z_is_refused_by_name() {
     let text = file_form("LINUXCNC KNEE MILL", json!({}));
     for m in [mounted(&text), serde_json::from_str(&text).expect("raw door")] {
-        let out = engine::run(&cps(), &m, STREAM).expect("runs");
+        let out = engine::run_with(&cps(), &m, STREAM, &doc_units(&m)).expect("runs");
         assert_eq!(out.warnings.len(), 1, "refused once: {:?}", out.warnings);
         assert!(
             out.warnings[0].contains("machine LINUXCNC KNEE MILL does not state its safe Z retract")
@@ -141,7 +141,7 @@ fn a_non_tormach_machine_without_a_safe_z_is_refused_by_name() {
         assert!(!out.program.contains("G53"), "no guessed retract\n{}", out.program);
     }
     let own = file_form("Tormach 770MX (shop copy)", json!({}));
-    let out = engine::run(&cps(), &mounted(&own), STREAM).expect("posts");
+    let out = engine::run_with(&cps(), &mounted(&own), STREAM, &doc_units(&mounted(&own))).expect("posts");
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
     assert_eq!(out.program.matches("G53 G0 Z0\nG30\n").count(), 3, "{}", out.program);
 }
@@ -159,4 +159,16 @@ fn a_garbled_safe_retract_refuses_the_file() {
     assert!(e.contains("axis X states safe_retract - only the linear Z axis states one"), "{e}");
     let null = parse_mch(&file_form("M", json!({ "safe_retract": null }))).expect("null is unstated");
     assert_eq!(null.safe_retract_z, None);
+}
+
+/// #902: the program's unit is the document's, never the machine file's.
+/// These runs on an inch machine file stand for the inch document they
+/// posted before #902 (the file's own unit, through either door).
+fn doc_units(m: &serde_json::Value) -> serde_json::Value {
+    let word = m
+        .get("units")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| m.pointer("/kinematics/default/units/length").and_then(serde_json::Value::as_str));
+    let inch = matches!(word, Some("inch" | "inches"));
+    serde_json::json!({ "Units": if inch { "inch" } else { "mm" } })
 }

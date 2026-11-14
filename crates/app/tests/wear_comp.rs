@@ -12,8 +12,8 @@
 //! Regenerate after an intentional change:
 //! `WRITE_GOLDEN=1 cargo test -p camcraft-app --test wear_comp`
 //!
-//! Gate map (M4.4): covers app::commands, app::links, app::machining2d,
-//! app::model, app::operation, app::post, app::posting, app::project.
+//! Gate map (M4.4): covers app::commands, motion::links, motion::machining2d,
+//! app::model, app::operation, post::post, app::posting, app::project.
 
 mod common;
 
@@ -157,7 +157,7 @@ fn the_other_posts_refuse_wear_by_name_and_the_gate_blocks() {
     let m = posting::machine_value(&world);
     let out = engine::run(&post_text("fanuc-lathe"), &m, &text).unwrap();
     assert!(out.warnings.iter().any(|w| w.contains("nose-radius compensation")), "{:?}", out.warnings);
-    for stem in ["heidenhain", "tormach"] {
+    for stem in ["heidenhain", "tormach", "grblhal", "tinyg"] {
         let mut path = std::env::temp_dir();
         path.push(format!("camcraft_wear_comp_{stem}_{}.nc", std::process::id()));
         let err = posting::post_script(&world, &path, &post_text(stem)).expect_err("the gate blocks");

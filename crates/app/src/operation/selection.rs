@@ -217,7 +217,7 @@ pub(super) fn selection_geometry_in(
         OpParams::Pocket { .. } | OpParams::Adaptive2D { .. } | OpParams::Offset2D { .. }
     );
     // The plasma profile takes open runs as the contour does (#670).
-    let contour = matches!(params, OpParams::Contour { .. } | OpParams::PlasmaProfile(_));
+    let contour = matches!(params, OpParams::Contour { .. } | OpParams::PlasmaProfile(_) | OpParams::WireContour(_));
     let contour_side = match params {
         OpParams::Contour { side, .. } => *side,
         _ => Side::Auto,
@@ -547,7 +547,7 @@ pub(super) fn selection_region(
     // around the part, not a refusal).
     let past_edge = matches!(area.containment, Some(Containment::On | Containment::Outside));
     let region = match pocket_ladder(world, setup, items, params)? {
-        Some((part, planes)) if !past_edge => pocket_region_on_part(loops, &part, &planes)?,
+        Some((part, planes)) if !past_edge => pocket_region_on_part(loops, &part, &planes, crate::units::of(world))?,
         _ => Region::new(loops)?,
     };
     // The area controls run after this, at the seam's call sites (the

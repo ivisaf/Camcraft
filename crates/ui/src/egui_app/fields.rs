@@ -74,14 +74,27 @@ pub(crate) fn num(ui: &mut Ui, u: Unit, v: &mut f64) {
 /// one-pixel radius; because of that speed law the radius is the same
 /// ±0.1 mm in both modes, so the assist is unit-fair.
 fn num_prec(ui: &mut Ui, u: Unit, v: &mut f64, prec: usize, unit: &str) {
+    num_sized(ui, u, v, prec, &format!(" {unit}"), CTRL_W);
+}
+
+/// A narrow length field without a unit suffix, for a row of several
+/// under one caption that states the unit (a point's X, Y, Z - #361):
+/// the same lens as [`num`].
+pub(crate) fn num_narrow(ui: &mut Ui, u: Unit, v: &mut f64) {
+    num_sized(ui, u, v, 4, "", NARROW_W);
+}
+
+/// Width of a [`num_narrow`] field, logical px.
+const NARROW_W: f32 = 62.0;
+
+fn num_sized(ui: &mut Ui, u: Unit, v: &mut f64, prec: usize, suffix: &str, width: f32) {
     let h = ui.spacing().interact_size.y;
-    let suffix = format!(" {unit}");
     if u == Unit::Millimeters {
-        ui.add_sized([CTRL_W, h], DragValue::new(v).speed(0.1).suffix(suffix));
+        ui.add_sized([width, h], DragValue::new(v).speed(0.1).suffix(suffix));
     } else {
         let mut d = units::to_display(*v, u);
         let resp = ui.add_sized(
-            [CTRL_W, h],
+            [width, h],
             DragValue::new(&mut d)
                 .speed(0.1 / 25.4)
                 .custom_formatter(move |n, _| format!("{n:.prec$}"))

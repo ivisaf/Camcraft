@@ -61,11 +61,15 @@
 mod backend;
 mod backend_build;
 mod backend_edit;
+mod carried;
+mod carried_read;
 mod carry;
 mod columns;
 mod cut;
 mod dexel;
 mod dexel_arc;
+// #541: the sinker electrode's box atom.
+mod dexel_box;
 mod dexel_bull;
 mod deviate;
 mod edge_break;
@@ -110,11 +114,13 @@ mod wall_slack;
 
 pub use backend::{Backend, Stock, FIELD_BAND, FIELD_VERDICT_EPS, LATHE_COLUMN_REFUSAL};
 pub use backend_edit::SET_TOPS_FIELD_REFUSAL;
+pub use carried::{clip_columns_under, lattice_of_grid, CarriedStock, FieldBody};
 pub use carry::{Body, LatticeTurn, CARRY_TURN_REFUSAL};
 pub use columns::Columns;
 pub use cut::{auto_cell, first_posed, simulate, SimOp, POSED_REFUSAL};
 pub use deviate::{color_classes, deviate, Deviation, DEV_TOL, ProgramSim, SimSurface};
 pub use dexel::{reach, Dexel};
+pub use dexel_box::{simulate_box, BOX_ARC_REFUSAL};
 pub use edge_break::credit_breaks;
 pub use field::SdfField;
 pub use field_body::Lattice;
